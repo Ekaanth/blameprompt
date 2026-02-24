@@ -60,7 +60,11 @@ pub fn run(output: &str) {
                 provider: r.provider.clone(),
                 model: r.model.clone(),
                 user: r.user.clone(),
-                file: r.all_file_paths().first().map(|f| relative_path(f)).unwrap_or_default(),
+                file: r
+                    .all_file_paths()
+                    .first()
+                    .map(|f| relative_path(f))
+                    .unwrap_or_default(),
                 timestamp: r.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
                 deployment: classification.deployment.clone(),
                 receipt_id: r.id.clone(),
@@ -79,7 +83,11 @@ pub fn run(output: &str) {
                             provider: r.provider.clone(),
                             model: r.model.clone(),
                             user: r.user.clone(),
-                            file: r.all_file_paths().first().map(|f| relative_path(f)).unwrap_or_default(),
+                            file: r
+                                .all_file_paths()
+                                .first()
+                                .map(|f| relative_path(f))
+                                .unwrap_or_default(),
                             timestamp: r.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
                             deployment: classification.deployment.clone(),
                             receipt_id: r.id.clone(),

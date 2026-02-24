@@ -159,7 +159,7 @@ pub fn search_prompts(query: &str, limit: usize) -> Result<Vec<(String, Receipt)
                     mcp_servers: vec![],
                     agents_spawned: vec![],
                     files_changed: vec![], // SQLite cache uses legacy file_path/line_range
-                    conversation: None,   // SQLite cache doesn't store conversation turns
+                    conversation: None,    // SQLite cache doesn't store conversation turns
                 },
             ))
         })

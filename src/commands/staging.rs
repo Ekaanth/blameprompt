@@ -64,9 +64,11 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
     let mut data = read_staging_in(base);
 
     // Look for an existing receipt with same (session_id, prompt_number)
-    if let Some(existing) = data.receipts.iter_mut().find(|r| {
-        r.session_id == receipt.session_id && r.prompt_number == receipt.prompt_number
-    }) {
+    if let Some(existing) = data
+        .receipts
+        .iter_mut()
+        .find(|r| r.session_id == receipt.session_id && r.prompt_number == receipt.prompt_number)
+    {
         let original_id = existing.id.clone();
         let original_parent = existing.parent_receipt_id.clone();
 
@@ -95,10 +97,7 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
     } else {
         // New prompt — find parent (previous receipt in this session or different session)
         let mut new_receipt = receipt.clone();
-        new_receipt.parent_receipt_id = data
-            .receipts
-            .last()
-            .map(|r| r.id.clone());
+        new_receipt.parent_receipt_id = data.receipts.last().map(|r| r.id.clone());
         data.receipts.push(new_receipt);
     }
 

@@ -171,7 +171,10 @@ fn write_receipt_md(md: &mut String, r: &Receipt) {
         md.push_str(&format!("| MCP Servers | {} |\n", r.mcp_servers.join(", ")));
     }
     if !r.agents_spawned.is_empty() {
-        md.push_str(&format!("| Agents Spawned | {} |\n", r.agents_spawned.join("; ")));
+        md.push_str(&format!(
+            "| Agents Spawned | {} |\n",
+            r.agents_spawned.join("; ")
+        ));
     }
     md.push('\n');
     for fc in &file_changes {
@@ -329,7 +332,11 @@ pub fn run(
                     } else {
                         &entry.commit_sha
                     };
-                    let files_str: Vec<String> = r.all_file_paths().iter().map(|f| relative_path(f)).collect();
+                    let files_str: Vec<String> = r
+                        .all_file_paths()
+                        .iter()
+                        .map(|f| relative_path(f))
+                        .collect();
                     println!(
                         "{},{},{},{},{},{},{},{},{:.4},{},{},{},{}",
                         sha_display,

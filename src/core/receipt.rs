@@ -94,7 +94,10 @@ impl Receipt {
 
     /// Returns all unique file paths from this receipt.
     pub fn all_file_paths(&self) -> Vec<String> {
-        self.all_file_changes().iter().map(|fc| fc.path.clone()).collect()
+        self.all_file_changes()
+            .iter()
+            .map(|fc| fc.path.clone())
+            .collect()
     }
 
     /// Total lines changed across all files.
@@ -208,8 +211,14 @@ mod tests {
             file_path: String::new(),
             line_range: (0, 0),
             files_changed: vec![
-                FileChange { path: "src/main.rs".to_string(), line_range: (1, 10) },
-                FileChange { path: "src/lib.rs".to_string(), line_range: (5, 20) },
+                FileChange {
+                    path: "src/main.rs".to_string(),
+                    line_range: (1, 10),
+                },
+                FileChange {
+                    path: "src/lib.rs".to_string(),
+                    line_range: (5, 20),
+                },
             ],
             parent_receipt_id: None,
             prompt_number: Some(1),
@@ -283,14 +292,22 @@ mod tests {
             message_count: 1,
             cost_usd: 0.0,
             timestamp: Utc::now(),
-            session_start: None, session_end: None,
-            session_duration_secs: None, ai_response_time_secs: None,
+            session_start: None,
+            session_end: None,
+            session_duration_secs: None,
+            ai_response_time_secs: None,
             user: "u".to_string(),
             file_path: String::new(),
             line_range: (0, 0),
             files_changed: vec![
-                FileChange { path: "a.rs".to_string(), line_range: (1, 10) },
-                FileChange { path: "b.rs".to_string(), line_range: (5, 15) },
+                FileChange {
+                    path: "a.rs".to_string(),
+                    line_range: (1, 10),
+                },
+                FileChange {
+                    path: "b.rs".to_string(),
+                    line_range: (5, 15),
+                },
             ],
             parent_receipt_id: None,
             prompt_number: None,
@@ -316,8 +333,10 @@ mod tests {
             message_count: 1,
             cost_usd: 0.0,
             timestamp: Utc::now(),
-            session_start: None, session_end: None,
-            session_duration_secs: None, ai_response_time_secs: None,
+            session_start: None,
+            session_end: None,
+            session_duration_secs: None,
+            ai_response_time_secs: None,
             user: "u".to_string(),
             file_path: "old_file.rs".to_string(),
             line_range: (1, 50),

@@ -54,7 +54,9 @@ pub fn calculate(receipts: &[&Receipt]) -> SessionStats {
     let mut session_intervals: HashMap<String, (DateTime<Utc>, DateTime<Utc>)> = HashMap::new();
     for r in receipts {
         if let (Some(start), Some(end)) = (r.session_start, r.session_end) {
-            let entry = session_intervals.entry(r.session_id.clone()).or_insert((start, end));
+            let entry = session_intervals
+                .entry(r.session_id.clone())
+                .or_insert((start, end));
             if start < entry.0 {
                 entry.0 = start;
             }
@@ -222,12 +224,8 @@ mod tests {
         // Main agent: 10:00 - 10:10 (600s)
         // Sub-agent:  10:02 - 10:08 (360s) — fully within main
         let base = Utc::now();
-        let r1 = make_receipt_with_times(
-            "main-agent",
-            Some(600),
-            base,
-            base + Duration::seconds(600),
-        );
+        let r1 =
+            make_receipt_with_times("main-agent", Some(600), base, base + Duration::seconds(600));
         let r2 = make_receipt_with_times(
             "sub-agent",
             Some(360),
@@ -247,12 +245,7 @@ mod tests {
         // Agent A: 10:00 - 10:10 (600s)
         // Agent B: 10:05 - 10:15 (600s) — partially overlapping
         let base = Utc::now();
-        let r1 = make_receipt_with_times(
-            "agent-a",
-            Some(600),
-            base,
-            base + Duration::seconds(600),
-        );
+        let r1 = make_receipt_with_times("agent-a", Some(600), base, base + Duration::seconds(600));
         let r2 = make_receipt_with_times(
             "agent-b",
             Some(600),
@@ -271,12 +264,7 @@ mod tests {
         // Agent A: 10:00 - 10:10 (600s)
         // Agent B: 11:00 - 11:05 (300s) — no overlap
         let base = Utc::now();
-        let r1 = make_receipt_with_times(
-            "agent-a",
-            Some(600),
-            base,
-            base + Duration::seconds(600),
-        );
+        let r1 = make_receipt_with_times("agent-a", Some(600), base, base + Duration::seconds(600));
         let r2 = make_receipt_with_times(
             "agent-b",
             Some(300),
@@ -299,12 +287,7 @@ mod tests {
             base + Duration::seconds(100),
             base + Duration::seconds(700),
         );
-        let r2 = make_receipt_with_times(
-            "agent-b",
-            Some(300),
-            base,
-            base + Duration::seconds(900),
-        );
+        let r2 = make_receipt_with_times("agent-b", Some(300), base, base + Duration::seconds(900));
         let receipts: Vec<&Receipt> = vec![&r1, &r2];
 
         let stats = calculate(&receipts);

@@ -185,10 +185,16 @@ fn write_executive_summary(
     let mut all_mcps: HashSet<&str> = HashSet::new();
     let mut all_agents: Vec<&str> = Vec::new();
     for r in receipts {
-        for t in &r.tools_used { all_tools.insert(t.as_str()); }
-        for m in &r.mcp_servers { all_mcps.insert(m.as_str()); }
+        for t in &r.tools_used {
+            all_tools.insert(t.as_str());
+        }
+        for m in &r.mcp_servers {
+            all_mcps.insert(m.as_str());
+        }
         for a in &r.agents_spawned {
-            if !all_agents.contains(&a.as_str()) { all_agents.push(a.as_str()); }
+            if !all_agents.contains(&a.as_str()) {
+                all_agents.push(a.as_str());
+            }
         }
     }
     if !all_tools.is_empty() {
@@ -754,7 +760,10 @@ fn write_prompt_details(md: &mut String, entries: &[audit::AuditEntry]) {
 
         for r in &entry.receipts {
             let file_changes = r.all_file_changes();
-            let files_display: Vec<String> = file_changes.iter().map(|fc| relative_path(&fc.path)).collect();
+            let files_display: Vec<String> = file_changes
+                .iter()
+                .map(|fc| relative_path(&fc.path))
+                .collect();
             writeln!(
                 md,
                 "#### {} | `{}` via {}\n",
@@ -782,7 +791,14 @@ fn write_prompt_details(md: &mut String, entries: &[audit::AuditEntry]) {
             }
             writeln!(md).ok();
             for fc in &file_changes {
-                writeln!(md, "- `{}` (lines {}-{})", relative_path(&fc.path), fc.line_range.0, fc.line_range.1).ok();
+                writeln!(
+                    md,
+                    "- `{}` (lines {}-{})",
+                    relative_path(&fc.path),
+                    fc.line_range.0,
+                    fc.line_range.1
+                )
+                .ok();
             }
             writeln!(md).ok();
 

@@ -301,28 +301,22 @@ fn basename(path: &str) -> &str {
 /// Examples: `Bash(command: "git status")`, `Write(file: "main.rs")`
 fn tool_summary(name: &str, input: &serde_json::Value) -> String {
     let arg = match name {
-        "Bash" => input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .map(|s| {
-                let truncated: String = s.chars().take(80).collect();
-                if s.chars().count() > 80 {
-                    format!("command: \"{}...\"", truncated)
-                } else {
-                    format!("command: \"{}\"", truncated)
-                }
-            }),
+        "Bash" => input.get("command").and_then(|v| v.as_str()).map(|s| {
+            let truncated: String = s.chars().take(80).collect();
+            if s.chars().count() > 80 {
+                format!("command: \"{}...\"", truncated)
+            } else {
+                format!("command: \"{}\"", truncated)
+            }
+        }),
         "Write" | "Edit" | "MultiEdit" | "Read" => input
             .get("file_path")
             .and_then(|v| v.as_str())
             .map(|s| format!("file: \"{}\"", basename(s))),
-        "Grep" => input
-            .get("pattern")
-            .and_then(|v| v.as_str())
-            .map(|s| {
-                let truncated: String = s.chars().take(60).collect();
-                format!("pattern: \"{}\"", truncated)
-            }),
+        "Grep" => input.get("pattern").and_then(|v| v.as_str()).map(|s| {
+            let truncated: String = s.chars().take(60).collect();
+            format!("pattern: \"{}\"", truncated)
+        }),
         "Glob" => input
             .get("pattern")
             .and_then(|v| v.as_str())
@@ -622,7 +616,11 @@ mod tests {
         let long_cmd = "a".repeat(100);
         let input = serde_json::json!({"command": long_cmd});
         let result = tool_summary("Bash", &input);
-        assert!(result.contains("...\""), "Missing truncation marker: {}", result);
+        assert!(
+            result.contains("...\""),
+            "Missing truncation marker: {}",
+            result
+        );
         // 80 char command + wrapper "Bash(command: \"...\")" ~ 100 chars total
         assert!(!result.contains(&"a".repeat(100)), "Command not truncated");
     }
@@ -630,19 +628,13 @@ mod tests {
     #[test]
     fn test_tool_summary_write() {
         let input = serde_json::json!({"file_path": "/Users/someone/project/src/main.rs", "content": "..."});
-        assert_eq!(
-            tool_summary("Write", &input),
-            r#"Write(file: "main.rs")"#
-        );
+        assert_eq!(tool_summary("Write", &input), r#"Write(file: "main.rs")"#);
     }
 
     #[test]
     fn test_tool_summary_grep() {
         let input = serde_json::json!({"pattern": "fn main"});
-        assert_eq!(
-            tool_summary("Grep", &input),
-            r#"Grep(pattern: "fn main")"#
-        );
+        assert_eq!(tool_summary("Grep", &input), r#"Grep(pattern: "fn main")"#);
     }
 
     #[test]

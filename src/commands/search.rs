@@ -49,7 +49,10 @@ pub fn run(query: &str, limit: usize, format: &str) {
     for sha in &commits {
         if let Some(payload) = notes::read_receipts_for_commit(sha) {
             for r in &payload.receipts {
-                let file_match = r.all_file_paths().iter().any(|f| f.to_lowercase().contains(&query_lower));
+                let file_match = r
+                    .all_file_paths()
+                    .iter()
+                    .any(|f| f.to_lowercase().contains(&query_lower));
                 if r.prompt_summary.to_lowercase().contains(&query_lower)
                     || file_match
                     || r.model.to_lowercase().contains(&query_lower)
@@ -91,8 +94,16 @@ pub fn run(query: &str, limit: usize, format: &str) {
                     receipt_id: r.id.clone(),
                     provider: r.provider.clone(),
                     model: r.model.clone(),
-                    file_path: r.all_file_paths().first().map(|f| audit::relative_path(f)).unwrap_or_default(),
-                    line_range: r.all_file_changes().first().map(|fc| fc.line_range).unwrap_or((0, 0)),
+                    file_path: r
+                        .all_file_paths()
+                        .first()
+                        .map(|f| audit::relative_path(f))
+                        .unwrap_or_default(),
+                    line_range: r
+                        .all_file_changes()
+                        .first()
+                        .map(|fc| fc.line_range)
+                        .unwrap_or((0, 0)),
                     files_changed: r.all_file_changes(),
                     cost_usd: r.cost_usd,
                     prompt_summary: r.prompt_summary.clone(),

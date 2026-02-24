@@ -172,7 +172,11 @@ pub fn run(commit: &str, format: &str) {
     for r in &payload.receipts {
         if let Some(ref turns) = r.conversation {
             let id_short = if r.id.len() >= 8 { &r.id[..8] } else { &r.id };
-            let files_display: Vec<String> = r.all_file_paths().iter().map(|f| audit::relative_path(f)).collect();
+            let files_display: Vec<String> = r
+                .all_file_paths()
+                .iter()
+                .map(|f| audit::relative_path(f))
+                .collect();
             println!(
                 "\nChain of Thought for receipt {} ({}):",
                 id_short,

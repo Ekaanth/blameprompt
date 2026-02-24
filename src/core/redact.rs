@@ -317,11 +317,23 @@ mod tests {
     fn test_redact_shell_prompt() {
         let text = "(base) metaquity@Abhisheks-MacBook-Pro-2 blameprompt % blameprompt pull";
         let redacted = redact_secrets(text);
-        assert!(!redacted.contains("metaquity@"), "Username leaked: {}", redacted);
-        assert!(redacted.contains("[REDACTED_HOST]"), "Host not redacted: {}", redacted);
+        assert!(
+            !redacted.contains("metaquity@"),
+            "Username leaked: {}",
+            redacted
+        );
+        assert!(
+            redacted.contains("[REDACTED_HOST]"),
+            "Host not redacted: {}",
+            redacted
+        );
         // Rest of prompt preserved
         assert!(redacted.contains("(base)"), "Env prefix lost: {}", redacted);
-        assert!(redacted.contains("blameprompt pull"), "Command lost: {}", redacted);
+        assert!(
+            redacted.contains("blameprompt pull"),
+            "Command lost: {}",
+            redacted
+        );
     }
 
     #[test]

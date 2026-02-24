@@ -1,8 +1,8 @@
 use crate::commands::staging;
 use crate::core::{config, pricing, receipt::Receipt, redact, transcript};
-use transcript::{extract_tools_used, extract_mcp_servers, extract_agents_spawned};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
+use transcript::{extract_agents_spawned, extract_mcp_servers, extract_tools_used};
 
 pub fn run(session_path: &str, provider: Option<&str>) {
     let provider = provider.unwrap_or("claude");
@@ -99,7 +99,10 @@ pub fn run(session_path: &str, provider: Option<&str>) {
         session_duration_secs: parsed.session_duration_secs,
         ai_response_time_secs: parsed.avg_response_time_secs,
         user: user.clone(),
-        file_path: files_changed.first().map(|f| f.path.clone()).unwrap_or_default(),
+        file_path: files_changed
+            .first()
+            .map(|f| f.path.clone())
+            .unwrap_or_default(),
         line_range: (0, 0),
         files_changed,
         parent_receipt_id: None,

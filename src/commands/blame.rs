@@ -91,9 +91,7 @@ pub fn calculate_code_origin(file: &str) -> Option<CodeOriginStats> {
             if let Some(receipts) = sha_receipts.get(sha) {
                 'line: for r in receipts {
                     for fc in r.all_file_changes() {
-                        if (fc.path == file
-                            || file.ends_with(&fc.path)
-                            || fc.path.ends_with(file))
+                        if (fc.path == file || file.ends_with(&fc.path) || fc.path.ends_with(file))
                             && line_num >= fc.line_range.0
                             && line_num <= fc.line_range.1
                         {

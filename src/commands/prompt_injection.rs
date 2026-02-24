@@ -120,45 +120,45 @@ pub fn run(output: &str) {
 
     // Scan AI-generated code for injection patterns
     for r in &all_receipts {
-      for fc in r.all_file_changes() {
-        let file_path = &fc.path;
-        let content = match std::fs::read_to_string(file_path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
+        for fc in r.all_file_changes() {
+            let file_path = &fc.path;
+            let content = match std::fs::read_to_string(file_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
 
-        files_scanned += 1;
-        let lines: Vec<&str> = content.lines().collect();
+            files_scanned += 1;
+            let lines: Vec<&str> = content.lines().collect();
 
-        let start = fc.line_range.0.saturating_sub(1) as usize;
-        let end = (fc.line_range.1 as usize).min(lines.len());
+            let start = fc.line_range.0.saturating_sub(1) as usize;
+            let end = (fc.line_range.1 as usize).min(lines.len());
 
-        if start >= lines.len() {
-            continue;
-        }
+            if start >= lines.len() {
+                continue;
+            }
 
-        for (i, line) in lines[start..end].iter().enumerate() {
-            let line_num = (start + i + 1) as u32;
-            lines_scanned += 1;
+            for (i, line) in lines[start..end].iter().enumerate() {
+                let line_num = (start + i + 1) as u32;
+                lines_scanned += 1;
 
-            for pattern in INJECTION_PATTERNS {
-                if let Ok(re) = Regex::new(pattern.pattern) {
-                    if re.is_match(line) {
-                        detections.push(Detection {
-                            file: relative_path(file_path),
-                            line_number: line_num,
-                            line_content: line.trim().chars().take(120).collect(),
-                            pattern_name: pattern.name.to_string(),
-                            severity: pattern.severity.to_string(),
-                            description: pattern.description.to_string(),
-                            model: r.model.clone(),
-                            receipt_id: r.id.clone(),
-                        });
+                for pattern in INJECTION_PATTERNS {
+                    if let Ok(re) = Regex::new(pattern.pattern) {
+                        if re.is_match(line) {
+                            detections.push(Detection {
+                                file: relative_path(file_path),
+                                line_number: line_num,
+                                line_content: line.trim().chars().take(120).collect(),
+                                pattern_name: pattern.name.to_string(),
+                                severity: pattern.severity.to_string(),
+                                description: pattern.description.to_string(),
+                                model: r.model.clone(),
+                                receipt_id: r.id.clone(),
+                            });
+                        }
                     }
                 }
             }
         }
-      }
     }
 
     // Also scan conversation turns for suspicious AI instructions

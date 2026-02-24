@@ -162,54 +162,55 @@ pub fn run(output: &str) {
 
     // Scan each AI-generated file region
     for r in &all_receipts {
-      for fc in r.all_file_changes() {
-        let file_path = &fc.path;
-        let content = match std::fs::read_to_string(file_path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
+        for fc in r.all_file_changes() {
+            let file_path = &fc.path;
+            let content = match std::fs::read_to_string(file_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
 
-        files_scanned += 1;
-        let lines: Vec<&str> = content.lines().collect();
+            files_scanned += 1;
+            let lines: Vec<&str> = content.lines().collect();
 
-        // Only scan lines within the AI-generated range
-        let start = fc.line_range.0.saturating_sub(1) as usize;
-        let end = (fc.line_range.1 as usize).min(lines.len());
+            // Only scan lines within the AI-generated range
+            let start = fc.line_range.0.saturating_sub(1) as usize;
+            let end = (fc.line_range.1 as usize).min(lines.len());
 
-        if start >= lines.len() {
-            continue;
-        }
+            if start >= lines.len() {
+                continue;
+            }
 
-        let file_ext = file_path.rsplit('.').next().unwrap_or("");
+            let file_ext = file_path.rsplit('.').next().unwrap_or("");
 
-        for (i, line) in lines[start..end].iter().enumerate() {
-            let line_num = (start + i + 1) as u32;
-            lines_scanned += 1;
+            for (i, line) in lines[start..end].iter().enumerate() {
+                let line_num = (start + i + 1) as u32;
+                lines_scanned += 1;
 
-            for vuln in VULN_PATTERNS {
-                // Check file extension filter
-                if !vuln.file_extensions.is_empty() && !vuln.file_extensions.contains(&file_ext) {
-                    continue;
-                }
+                for vuln in VULN_PATTERNS {
+                    // Check file extension filter
+                    if !vuln.file_extensions.is_empty() && !vuln.file_extensions.contains(&file_ext)
+                    {
+                        continue;
+                    }
 
-                if let Ok(re) = Regex::new(vuln.pattern) {
-                    if re.is_match(line) {
-                        findings.push(Finding {
-                            file: relative_path(file_path),
-                            line_number: line_num,
-                            line_content: line.trim().chars().take(120).collect(),
-                            vuln_name: vuln.name.to_string(),
-                            severity: vuln.severity.to_string(),
-                            cwe: vuln.cwe.to_string(),
-                            description: vuln.description.to_string(),
-                            fix: vuln.fix.to_string(),
-                            model: r.model.clone(),
-                        });
+                    if let Ok(re) = Regex::new(vuln.pattern) {
+                        if re.is_match(line) {
+                            findings.push(Finding {
+                                file: relative_path(file_path),
+                                line_number: line_num,
+                                line_content: line.trim().chars().take(120).collect(),
+                                vuln_name: vuln.name.to_string(),
+                                severity: vuln.severity.to_string(),
+                                cwe: vuln.cwe.to_string(),
+                                description: vuln.description.to_string(),
+                                fix: vuln.fix.to_string(),
+                                model: r.model.clone(),
+                            });
+                        }
                     }
                 }
             }
-        }
-      } // for fc in all_file_changes
+        } // for fc in all_file_changes
     }
 
     // Generate report

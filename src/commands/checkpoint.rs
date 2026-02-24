@@ -1,10 +1,14 @@
 use crate::commands::staging;
-use crate::core::{config, pricing, receipt::{FileChange, Receipt}, redact, transcript};
-use transcript::{extract_tools_used, extract_mcp_servers, extract_agents_spawned};
+use crate::core::{
+    config, pricing,
+    receipt::{FileChange, Receipt},
+    redact, transcript,
+};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::Path;
+use transcript::{extract_agents_spawned, extract_mcp_servers, extract_tools_used};
 
 #[derive(Debug)]
 struct HookInput {
@@ -83,7 +87,11 @@ fn parse_diff_hunks(diff_output: &str) -> (u32, u32) {
             }
         }
     }
-    if start == 0 { (0, 0) } else { (start, end) }
+    if start == 0 {
+        (0, 0)
+    } else {
+        (start, end)
+    }
 }
 
 /// Try to detect changed lines using multiple git diff strategies.
@@ -215,7 +223,10 @@ fn build_context(input: &HookInput) -> Option<TranscriptContext> {
 
     let parsed = transcript::parse_claude_jsonl(transcript_path).ok()?;
     let cfg = config::load_config();
-    let model = parsed.model.clone().unwrap_or_else(|| "unknown".to_string());
+    let model = parsed
+        .model
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
 
     let full_text = transcript::full_conversation_text(&parsed.transcript);
     let mut hasher = Sha256::new();
@@ -308,8 +319,14 @@ fn handle_file_change(agent: &str, input: &HookInput) {
         session_duration_secs: ctx.parsed.session_duration_secs,
         ai_response_time_secs: ctx.parsed.avg_response_time_secs,
         user: ctx.user,
-        file_path: files_changed.first().map(|f| f.path.clone()).unwrap_or_default(),
-        line_range: files_changed.first().map(|f| f.line_range).unwrap_or((0, 0)),
+        file_path: files_changed
+            .first()
+            .map(|f| f.path.clone())
+            .unwrap_or_default(),
+        line_range: files_changed
+            .first()
+            .map(|f| f.line_range)
+            .unwrap_or((0, 0)),
         files_changed,
         parent_receipt_id: None,
         prompt_number: Some(prompt_number),
@@ -435,7 +452,13 @@ mod tests {
             make_relative("/home/user/project/src/main.rs", "/home/user/project"),
             "src/main.rs"
         );
-        assert_eq!(make_relative("src/main.rs", "/home/user/project"), "src/main.rs");
-        assert_eq!(make_relative("/other/path/file.rs", "/home/user/project"), "/other/path/file.rs");
+        assert_eq!(
+            make_relative("src/main.rs", "/home/user/project"),
+            "src/main.rs"
+        );
+        assert_eq!(
+            make_relative("/other/path/file.rs", "/home/user/project"),
+            "/other/path/file.rs"
+        );
     }
 }
