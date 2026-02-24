@@ -1,7 +1,31 @@
 use crate::core::receipt::{CodeOrigin, CodeOriginStats};
 use crate::git::notes;
 use comfy_table::{Cell, Color, Table};
+use serde::Serialize;
 use std::collections::HashMap;
+
+#[derive(Serialize)]
+pub struct BlameLineOutput {
+    pub line: u32,
+    pub code: String,
+    pub source: String,
+    pub provider: String,
+    pub model: String,
+    pub cost_usd: f64,
+    pub prompt_summary: String,
+    pub receipt_id: String,
+    pub commit_sha: String,
+}
+
+#[derive(Serialize)]
+pub struct BlameOutput {
+    pub file: String,
+    pub total_lines: u32,
+    pub ai_lines: u32,
+    pub ai_pct: f64,
+    pub human_pct: f64,
+    pub lines: Vec<BlameLineOutput>,
+}
 
 pub fn calculate_code_origin(file: &str) -> Option<CodeOriginStats> {
     let file_content = std::fs::read_to_string(file).ok()?;
@@ -90,7 +114,17 @@ pub fn calculate_code_origin(file: &str) -> Option<CodeOriginStats> {
     })
 }
 
-pub fn run(file: &str) {
+struct LineAttribution {
+    source: String,
+    provider: String,
+    model: String,
+    cost_usd: f64,
+    prompt_summary: String,
+    receipt_id: String,
+}
+
+#[allow(clippy::type_complexity)]
+fn compute_blame(file: &str) -> Option<(Vec<String>, HashMap<u32, String>, Vec<LineAttribution>)> {
     // Verify file exists and is tracked
     let output = std::process::Command::new("git")
         .args(["ls-files", file])
@@ -99,11 +133,11 @@ pub fn run(file: &str) {
     match &output {
         Ok(o) if o.stdout.is_empty() => {
             eprintln!("Error: '{}' is not tracked by git", file);
-            return;
+            return None;
         }
         Err(_) => {
             eprintln!("Error: Not in a git repository");
-            return;
+            return None;
         }
         _ => {}
     }
@@ -116,7 +150,7 @@ pub fn run(file: &str) {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
         _ => {
             eprintln!("Error: git blame failed for '{}'", file);
-            return;
+            return None;
         }
     };
 
@@ -160,33 +194,23 @@ pub fn run(file: &str) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Error reading file: {}", e);
-            return;
+            return None;
         }
     };
 
-    let lines: Vec<&str> = file_content.lines().collect();
+    let lines: Vec<String> = file_content.lines().map(|s| s.to_string()).collect();
+    let mut attributions = Vec::new();
 
-    // Build table
-    let mut table = Table::new();
-    table.set_header(vec![
-        "Line", "Code", "Source", "Provider", "Model", "Cost", "Prompt",
-    ]);
-
-    let mut ai_line_count = 0u32;
-    let total_lines = lines.len() as u32;
-
-    for (idx, line_content) in lines.iter().enumerate() {
+    for (idx, _) in lines.iter().enumerate() {
         let line_num = (idx + 1) as u32;
-        let code: String = line_content.chars().take(50).collect();
-
         let commit_sha = line_commits.get(&line_num);
 
-        // Check if this line has an AI receipt
-        let mut source = "Human";
-        let mut provider = "".to_string();
-        let mut model = "".to_string();
-        let mut cost = "".to_string();
-        let mut prompt = "".to_string();
+        let mut source = "human".to_string();
+        let mut provider = String::new();
+        let mut model = String::new();
+        let mut cost_usd = 0.0;
+        let mut prompt_summary = String::new();
+        let mut receipt_id = String::new();
 
         if let Some(sha) = commit_sha {
             // Check file_mappings first for finer granularity
@@ -197,13 +221,13 @@ pub fn run(file: &str) {
                             if line_num >= h.start_line && line_num <= h.end_line {
                                 match h.origin {
                                     CodeOrigin::AiGenerated => {
-                                        source = "AI";
+                                        source = "ai".to_string();
                                         if let Some(ref m) = h.model {
                                             model = m.clone();
                                         }
                                     }
-                                    CodeOrigin::HumanEdited => source = "Edited",
-                                    CodeOrigin::PureHuman => source = "Human",
+                                    CodeOrigin::HumanEdited => source = "edited".to_string(),
+                                    CodeOrigin::PureHuman => source = "human".to_string(),
                                 }
                                 break;
                             }
@@ -213,7 +237,7 @@ pub fn run(file: &str) {
             }
 
             // Fall back to receipt-level matching
-            if source == "Human" {
+            if source == "human" {
                 if let Some(receipts) = sha_receipts.get(sha) {
                     for r in receipts {
                         if (r.file_path == file
@@ -222,11 +246,12 @@ pub fn run(file: &str) {
                             && line_num >= r.line_range.0
                             && line_num <= r.line_range.1
                         {
-                            source = "AI";
+                            source = "ai".to_string();
                             provider = r.provider.clone();
                             model = r.model.clone();
-                            cost = format!("${:.4}", r.cost_usd);
-                            prompt = r.prompt_summary.chars().take(30).collect();
+                            cost_usd = r.cost_usd;
+                            prompt_summary = r.prompt_summary.clone();
+                            receipt_id = r.id.clone();
                             break;
                         }
                     }
@@ -234,24 +259,106 @@ pub fn run(file: &str) {
             }
         }
 
-        if source == "AI" {
-            ai_line_count += 1;
-        }
+        attributions.push(LineAttribution {
+            source,
+            provider,
+            model,
+            cost_usd,
+            prompt_summary,
+            receipt_id,
+        });
+    }
 
-        let source_color = match source {
-            "AI" => Color::Yellow,
-            "Edited" => Color::Cyan,
+    Some((lines, line_commits, attributions))
+}
+
+pub fn run(file: &str, format: &str) {
+    let (lines, line_commits, attributions) = match compute_blame(file) {
+        Some(data) => data,
+        None => return,
+    };
+
+    let total_lines = lines.len() as u32;
+    let ai_line_count = attributions.iter().filter(|a| a.source == "ai").count() as u32;
+
+    if format == "json" {
+        let output = BlameOutput {
+            file: file.to_string(),
+            total_lines,
+            ai_lines: ai_line_count,
+            ai_pct: if total_lines > 0 {
+                (ai_line_count as f64 / total_lines as f64) * 100.0
+            } else {
+                0.0
+            },
+            human_pct: if total_lines > 0 {
+                100.0 - (ai_line_count as f64 / total_lines as f64) * 100.0
+            } else {
+                100.0
+            },
+            lines: lines
+                .iter()
+                .enumerate()
+                .map(|(idx, code)| {
+                    let line_num = (idx + 1) as u32;
+                    let attr = &attributions[idx];
+                    BlameLineOutput {
+                        line: line_num,
+                        code: code.clone(),
+                        source: attr.source.clone(),
+                        provider: attr.provider.clone(),
+                        model: attr.model.clone(),
+                        cost_usd: attr.cost_usd,
+                        prompt_summary: attr.prompt_summary.clone(),
+                        receipt_id: attr.receipt_id.clone(),
+                        commit_sha: line_commits.get(&line_num).cloned().unwrap_or_default(),
+                    }
+                })
+                .collect(),
+        };
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        return;
+    }
+
+    // Table output (default)
+    let mut table = Table::new();
+    table.set_header(vec![
+        "Line", "Code", "Source", "Provider", "Model", "Cost", "Prompt",
+    ]);
+
+    for (idx, line_content) in lines.iter().enumerate() {
+        let line_num = (idx + 1) as u32;
+        let code: String = line_content.chars().take(50).collect();
+        let attr = &attributions[idx];
+
+        let source_display = match attr.source.as_str() {
+            "ai" => "AI",
+            "edited" => "Edited",
+            _ => "Human",
+        };
+
+        let source_color = match attr.source.as_str() {
+            "ai" => Color::Yellow,
+            "edited" => Color::Cyan,
             _ => Color::Green,
         };
+
+        let cost_display = if attr.cost_usd > 0.0 {
+            format!("${:.4}", attr.cost_usd)
+        } else {
+            String::new()
+        };
+
+        let prompt_display: String = attr.prompt_summary.chars().take(30).collect();
 
         table.add_row(vec![
             Cell::new(line_num),
             Cell::new(&code),
-            Cell::new(source).fg(source_color),
-            Cell::new(&provider),
-            Cell::new(&model),
-            Cell::new(&cost),
-            Cell::new(&prompt),
+            Cell::new(source_display).fg(source_color),
+            Cell::new(&attr.provider),
+            Cell::new(&attr.model),
+            Cell::new(&cost_display),
+            Cell::new(&prompt_display),
         ]);
     }
 

@@ -1,3 +1,4 @@
+use crate::commands::audit;
 use crate::git::notes;
 use comfy_table::Table;
 
@@ -14,7 +15,7 @@ fn resolve_sha(input: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub fn run(commit: &str) {
+pub fn run(commit: &str, format: &str) {
     let sha = match resolve_sha(commit) {
         Ok(s) => s,
         Err(e) => {
@@ -26,22 +27,43 @@ pub fn run(commit: &str) {
     let payload = match notes::read_receipts_for_commit(&sha) {
         Some(p) => p,
         None => {
-            println!(
-                "No BlamePrompt receipts found for commit {}",
-                &sha[..8.min(sha.len())]
-            );
+            if format == "json" {
+                println!(
+                    "{{\"error\":\"no_receipts\",\"commit\":\"{}\"}}",
+                    &sha[..8.min(sha.len())]
+                );
+            } else {
+                println!(
+                    "No BlamePrompt receipts found for commit {}",
+                    &sha[..8.min(sha.len())]
+                );
+            }
             return;
         }
     };
 
     if payload.receipts.is_empty() {
-        println!(
-            "No AI receipts attached to commit {}",
-            &sha[..8.min(sha.len())]
-        );
+        if format == "json" {
+            println!(
+                "{{\"error\":\"empty_receipts\",\"commit\":\"{}\"}}",
+                &sha[..8.min(sha.len())]
+            );
+        } else {
+            println!(
+                "No AI receipts attached to commit {}",
+                &sha[..8.min(sha.len())]
+            );
+        }
         return;
     }
 
+    // JSON output — NotePayload is already Serialize
+    if format == "json" {
+        println!("{}", serde_json::to_string_pretty(&payload).unwrap());
+        return;
+    }
+
+    // Table output (default)
     let sha_short = &sha[..8.min(sha.len())];
     println!("BlamePrompt receipts for commit {}", sha_short);
     println!("Schema version: {}", payload.blameprompt_version);
@@ -72,6 +94,7 @@ pub fn run(commit: &str) {
         let ts = r.timestamp.format("%Y-%m-%d %H:%M").to_string();
         let prompt: String = r.prompt_summary.chars().take(40).collect();
 
+        let rel_file = audit::relative_path(&r.file_path);
         table.add_row(vec![
             id_short,
             &r.provider,
@@ -79,7 +102,7 @@ pub fn run(commit: &str) {
             session_short,
             &r.message_count.to_string(),
             &format!("${:.4}", r.cost_usd),
-            &r.file_path,
+            &rel_file,
             &format!("{}-{}", r.line_range.0, r.line_range.1),
             &ts,
             &prompt,
@@ -94,7 +117,7 @@ pub fn run(commit: &str) {
         for fm in mappings {
             println!(
                 "  {} (blob: {})",
-                fm.path,
+                audit::relative_path(&fm.path),
                 &fm.blob_hash[..8.min(fm.blob_hash.len())]
             );
             for h in &fm.hunks {
@@ -146,7 +169,8 @@ pub fn run(commit: &str) {
             let id_short = if r.id.len() >= 8 { &r.id[..8] } else { &r.id };
             println!(
                 "\nChain of Thought for receipt {} ({}):",
-                id_short, r.file_path
+                id_short,
+                audit::relative_path(&r.file_path)
             );
             println!("{}", "-".repeat(60));
             for t in turns {
@@ -159,7 +183,9 @@ pub fn run(commit: &str) {
                 let content_preview: String = t.content.chars().take(120).collect();
                 println!("{} Turn {}: {}", prefix, t.turn, content_preview);
                 if let Some(ref files) = t.files_touched {
-                    println!("         Files: {}", files.join(", "));
+                    let rel_files: Vec<String> =
+                        files.iter().map(|f| audit::relative_path(f)).collect();
+                    println!("         Files: {}", rel_files.join(", "));
                 }
             }
         }

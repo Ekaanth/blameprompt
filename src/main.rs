@@ -53,12 +53,18 @@ enum Commands {
     Blame {
         /// File to analyze
         file: String,
+        /// Output format: table, json
+        #[arg(long, default_value = "table")]
+        format: String,
     },
 
     /// Display all AI receipts attached to a specific commit
     Show {
         /// Commit SHA (full or short)
         commit: String,
+        /// Output format: table, json
+        #[arg(long, default_value = "table")]
+        format: String,
     },
 
     /// Search across stored prompts
@@ -68,6 +74,9 @@ enum Commands {
         /// Maximum number of results (default: 50)
         #[arg(long, default_value = "50")]
         limit: usize,
+        /// Output format: table, json
+        #[arg(long, default_value = "table")]
+        format: String,
     },
 
     /// Show complete AI audit trail with filters
@@ -238,16 +247,20 @@ fn main() {
             }
         }
 
-        Commands::Blame { file } => {
-            commands::blame::run(&file);
+        Commands::Blame { file, format } => {
+            commands::blame::run(&file, &format);
         }
 
-        Commands::Show { commit } => {
-            commands::show::run(&commit);
+        Commands::Show { commit, format } => {
+            commands::show::run(&commit, &format);
         }
 
-        Commands::Search { query, limit } => {
-            commands::search::run(&query, limit);
+        Commands::Search {
+            query,
+            limit,
+            format,
+        } => {
+            commands::search::run(&query, limit, &format);
         }
 
         Commands::Audit {

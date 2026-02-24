@@ -53,17 +53,29 @@ pub fn run(session_path: &str, provider: Option<&str>) {
     let estimated_tokens = pricing::estimate_tokens_from_chars(total_chars);
     let cost = pricing::estimate_cost(&model, estimated_tokens / 2, estimated_tokens / 2);
 
-    let conversation_turns = transcript::extract_conversation_turns(
+    // Get cwd for converting absolute paths to relative
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let mut conversation_turns = transcript::extract_conversation_turns(
         &parsed.transcript,
         cfg.capture.max_prompt_length,
         &|text| redact::redact_secrets_with_config(text, &cfg),
     );
+    // Relativize files_touched in conversation turns
+    for turn in &mut conversation_turns {
+        if let Some(ref mut files) = turn.files_touched {
+            *files = files.iter().map(|f| make_relative(f, &cwd)).collect();
+        }
+    }
 
     let user = get_git_user();
     let message_count = parsed.transcript.messages.len() as u32;
 
     let mut receipt_count = 0;
     for file_path in &parsed.files_modified {
+        let relative_path = make_relative(file_path, &cwd);
         let receipt = Receipt {
             id: Receipt::new_id(),
             provider: provider.to_string(),
@@ -79,7 +91,7 @@ pub fn run(session_path: &str, provider: Option<&str>) {
             session_duration_secs: parsed.session_duration_secs,
             ai_response_time_secs: parsed.avg_response_time_secs,
             user: user.clone(),
-            file_path: file_path.clone(),
+            file_path: relative_path,
             line_range: (1, 1), // Unknown without diff context
             parent_receipt_id: None,
             conversation: if conversation_turns.is_empty() {
@@ -103,6 +115,23 @@ pub fn run(session_path: &str, provider: Option<&str>) {
     println!("  Files: {}", parsed.files_modified.join(", "));
     println!("  Est. cost: ${:.4}", cost);
     println!("\nReceipts added to staging. They will be attached on next commit.");
+}
+
+/// Convert an absolute path to a path relative to `base`.
+fn make_relative(path: &str, base: &str) -> String {
+    let path = path.trim();
+    let base = base.trim_end_matches('/');
+    if base.is_empty() || base == "." {
+        return path.to_string();
+    }
+    if let Some(rel) = path.strip_prefix(base) {
+        let rel = rel.strip_prefix('/').unwrap_or(rel);
+        if rel.is_empty() {
+            return path.to_string();
+        }
+        return rel.to_string();
+    }
+    path.to_string()
 }
 
 fn get_git_user() -> String {

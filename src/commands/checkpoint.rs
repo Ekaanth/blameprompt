@@ -32,6 +32,24 @@ fn parse_hook_input(json_str: &str) -> HookInput {
     }
 }
 
+/// Convert an absolute path to a path relative to `base`.
+/// If the path is already relative or doesn't start with base, return as-is.
+fn make_relative(path: &str, base: &str) -> String {
+    let path = path.trim();
+    let base = base.trim_end_matches('/');
+    if base.is_empty() || base == "." {
+        return path.to_string();
+    }
+    if let Some(rel) = path.strip_prefix(base) {
+        let rel = rel.strip_prefix('/').unwrap_or(rel);
+        if rel.is_empty() {
+            return path.to_string();
+        }
+        return rel.to_string();
+    }
+    path.to_string()
+}
+
 fn get_changed_lines(cwd: &str, file_path: &str) -> (u32, u32) {
     let output = std::process::Command::new("git")
         .current_dir(cwd)
@@ -166,21 +184,31 @@ pub fn run(agent: &str, hook_input_source: &str) {
     let cost = pricing::estimate_cost(&model, estimated_tokens / 2, estimated_tokens / 2);
 
     // Extract conversation turns (the chain of thought)
-    let conversation_turns = transcript::extract_conversation_turns(
+    let mut conversation_turns = transcript::extract_conversation_turns(
         &parsed.transcript,
         cfg.capture.max_prompt_length,
         &|text| redact::redact_secrets_with_config(text, &cfg),
     );
+    // Relativize files_touched in conversation turns
+    for turn in &mut conversation_turns {
+        if let Some(ref mut files) = turn.files_touched {
+            *files = files.iter().map(|f| make_relative(f, &cwd)).collect();
+        }
+    }
 
     let user = get_git_user();
     let message_count = parsed.transcript.messages.len() as u32;
 
-    // Determine which files to create receipts for
+    // Determine which files to create receipts for, always as relative paths
     let target_file = input.file_path.clone();
     let files: Vec<String> = if let Some(f) = target_file {
-        vec![f]
+        vec![make_relative(&f, &cwd)]
     } else {
-        parsed.files_modified.clone()
+        parsed
+            .files_modified
+            .iter()
+            .map(|f| make_relative(f, &cwd))
+            .collect()
     };
 
     // Read existing staging to find parent receipts for chaining
