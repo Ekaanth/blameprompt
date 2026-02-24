@@ -27,7 +27,9 @@ pub fn push() {
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
             if stderr.contains("does not match any") {
-                println!("[BlamePrompt] No notes to push (refs/notes/blameprompt does not exist yet).");
+                println!(
+                    "[BlamePrompt] No notes to push (refs/notes/blameprompt does not exist yet)."
+                );
                 println!("  Create some commits with AI receipts first.");
             } else {
                 eprintln!("Error pushing notes: {}", stderr);
@@ -56,7 +58,11 @@ pub fn pull() {
 
     println!("Fetching BlamePrompt notes from origin...");
     let output = Command::new("git")
-        .args(["fetch", "origin", "refs/notes/blameprompt:refs/notes/blameprompt"])
+        .args([
+            "fetch",
+            "origin",
+            "refs/notes/blameprompt:refs/notes/blameprompt",
+        ])
         .output();
 
     match output {
@@ -65,8 +71,12 @@ pub fn pull() {
 
             // Configure auto-fetch for future pulls
             let _ = Command::new("git")
-                .args(["config", "--add", "remote.origin.fetch",
-                       "+refs/notes/blameprompt:refs/notes/blameprompt"])
+                .args([
+                    "config",
+                    "--add",
+                    "remote.origin.fetch",
+                    "+refs/notes/blameprompt:refs/notes/blameprompt",
+                ])
                 .output();
         }
         Ok(o) => {

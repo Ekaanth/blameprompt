@@ -38,12 +38,42 @@ pub fn redact_with_report_and_config(text: &str, config: &RedactionConfig) -> Re
 
     let builtin_patterns: Vec<(&str, &str, &str, &str)> = vec![
         // (pattern, replacement, secret_type, severity)
-        (r"sk-[A-Za-z0-9_-]{20,}", "[REDACTED_API_KEY]", "API_KEY", "HIGH"),
-        (r"key-[A-Za-z0-9_-]{20,}", "[REDACTED_API_KEY]", "API_KEY", "HIGH"),
-        (r"AKIA[A-Z0-9]{16}", "[REDACTED_AWS_KEY]", "AWS_KEY", "CRITICAL"),
-        (r#"(?i)(password|secret)\s*=\s*"[^"]*""#, "[REDACTED_SECRET]", "PASSWORD", "HIGH"),
-        (r"(?i)Bearer\s+[A-Za-z0-9_.~+/=-]{10,}", "Bearer [REDACTED]", "BEARER_TOKEN", "HIGH"),
-        (r"(?i)(token|auth)\s*=\s*[A-Za-z0-9_.~+/=-]{40,}", "[REDACTED_TOKEN]", "TOKEN", "MEDIUM"),
+        (
+            r"sk-[A-Za-z0-9_-]{20,}",
+            "[REDACTED_API_KEY]",
+            "API_KEY",
+            "HIGH",
+        ),
+        (
+            r"key-[A-Za-z0-9_-]{20,}",
+            "[REDACTED_API_KEY]",
+            "API_KEY",
+            "HIGH",
+        ),
+        (
+            r"AKIA[A-Z0-9]{16}",
+            "[REDACTED_AWS_KEY]",
+            "AWS_KEY",
+            "CRITICAL",
+        ),
+        (
+            r#"(?i)(password|secret)\s*=\s*"[^"]*""#,
+            "[REDACTED_SECRET]",
+            "PASSWORD",
+            "HIGH",
+        ),
+        (
+            r"(?i)Bearer\s+[A-Za-z0-9_.~+/=-]{10,}",
+            "Bearer [REDACTED]",
+            "BEARER_TOKEN",
+            "HIGH",
+        ),
+        (
+            r"(?i)(token|auth)\s*=\s*[A-Za-z0-9_.~+/=-]{40,}",
+            "[REDACTED_TOKEN]",
+            "TOKEN",
+            "MEDIUM",
+        ),
     ];
 
     // Apply built-in patterns (skip disabled ones)
@@ -252,7 +282,10 @@ mod tests {
         let text = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
         let result = redact_with_report_and_config(text, &config);
         // Bearer token pattern should be skipped (but entropy might still catch it)
-        assert!(!result.detections.iter().any(|d| d.secret_type == "BEARER_TOKEN"));
+        assert!(!result
+            .detections
+            .iter()
+            .any(|d| d.secret_type == "BEARER_TOKEN"));
     }
 
     #[test]

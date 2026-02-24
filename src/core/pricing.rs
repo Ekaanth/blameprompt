@@ -16,7 +16,8 @@ pub fn estimate_tokens_from_chars(char_count: usize) -> u64 {
 fn get_rates(model_lower: &str) -> (f64, f64) {
     if model_lower.contains("opus-4-6") || model_lower.contains("opus-4-5") {
         (5.00, 25.00)
-    } else if model_lower.contains("opus-4-1") || model_lower.contains("opus-4-0")
+    } else if model_lower.contains("opus-4-1")
+        || model_lower.contains("opus-4-0")
         || model_lower.contains("opus-4-20")
     {
         (15.00, 75.00)
@@ -42,7 +43,12 @@ mod tests {
     fn test_sonnet_pricing() {
         let cost = estimate_cost("claude-sonnet-4-5-20250929", 1250, 890);
         let expected = (1250.0 / 1_000_000.0) * 3.0 + (890.0 / 1_000_000.0) * 15.0;
-        assert!((cost - expected).abs() < 0.0001, "Sonnet cost: {} vs expected: {}", cost, expected);
+        assert!(
+            (cost - expected).abs() < 0.0001,
+            "Sonnet cost: {} vs expected: {}",
+            cost,
+            expected
+        );
     }
 
     #[test]

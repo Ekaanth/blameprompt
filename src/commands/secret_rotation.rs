@@ -91,10 +91,12 @@ pub fn run(output: &str) {
     }
 
     // Separate cloud vs local exposures
-    let cloud_exposures: Vec<_> = exposures.iter()
+    let cloud_exposures: Vec<_> = exposures
+        .iter()
         .filter(|e| e.deployment == ModelDeployment::Cloud)
         .collect();
-    let local_exposures: Vec<_> = exposures.iter()
+    let local_exposures: Vec<_> = exposures
+        .iter()
         .filter(|e| e.deployment == ModelDeployment::Local)
         .collect();
 
@@ -107,28 +109,45 @@ pub fn run(output: &str) {
     md.push_str("## Summary\n\n");
     md.push_str("| Metric | Value |\n");
     md.push_str("|--------|-------|\n");
-    md.push_str(&format!("| Total receipts scanned | {} |\n", all_receipts.len()));
-    md.push_str(&format!("| Secrets detected in prompts | {} |\n", exposures.len()));
-    md.push_str(&format!("| Secrets sent to cloud APIs | {} |\n", cloud_exposures.len()));
-    md.push_str(&format!("| Secrets processed locally | {} |\n\n", local_exposures.len()));
+    md.push_str(&format!(
+        "| Total receipts scanned | {} |\n",
+        all_receipts.len()
+    ));
+    md.push_str(&format!(
+        "| Secrets detected in prompts | {} |\n",
+        exposures.len()
+    ));
+    md.push_str(&format!(
+        "| Secrets sent to cloud APIs | {} |\n",
+        cloud_exposures.len()
+    ));
+    md.push_str(&format!(
+        "| Secrets processed locally | {} |\n\n",
+        local_exposures.len()
+    ));
 
     if cloud_exposures.is_empty() && local_exposures.is_empty() {
-        md.push_str("**No secrets detected in stored prompts.** The redaction engine appears to be\n");
+        md.push_str(
+            "**No secrets detected in stored prompts.** The redaction engine appears to be\n",
+        );
         md.push_str("effectively filtering sensitive data. No rotation needed.\n\n");
     }
 
     // Cloud exposures — HIGH PRIORITY
     if !cloud_exposures.is_empty() {
         md.push_str("## ROTATION REQUIRED — Secrets Sent to Cloud APIs\n\n");
-        md.push_str("The following secrets were detected in prompts sent to **external AI providers**.\n");
+        md.push_str(
+            "The following secrets were detected in prompts sent to **external AI providers**.\n",
+        );
         md.push_str("These secrets should be **rotated immediately** as they may have been logged by the provider.\n\n");
 
         md.push_str("| Secret Type | Severity | Provider | Model | User | File | When |\n");
         md.push_str("|-------------|----------|----------|-------|------|------|------|\n");
         for e in &cloud_exposures {
-            md.push_str(&format!("| {} | {} | {} | {} | {} | {} | {} |\n",
-                e.secret_type, e.severity, e.provider, e.model,
-                e.user, e.file, e.timestamp));
+            md.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} | {} |\n",
+                e.secret_type, e.severity, e.provider, e.model, e.user, e.file, e.timestamp
+            ));
         }
         md.push('\n');
 
@@ -149,21 +168,28 @@ pub fn run(output: &str) {
                 "HIGH_ENTROPY" => "1. Identify what this secret is (API key, token, password, etc.)\n2. Rotate it following the appropriate procedure above\n3. Add a custom redaction pattern to `.blamepromptrc` to catch similar secrets",
                 _ => "1. Identify the secret type and its origin\n2. Rotate/regenerate the credential\n3. Update all references\n4. Add custom redaction patterns to prevent future exposure",
             };
-            md.push_str(&format!("#### {} ({} occurrence(s))\n\n{}\n\n", secret_type, count, instructions));
+            md.push_str(&format!(
+                "#### {} ({} occurrence(s))\n\n{}\n\n",
+                secret_type, count, instructions
+            ));
         }
     }
 
     // Local exposures — lower priority
     if !local_exposures.is_empty() {
         md.push_str("## Advisory — Secrets Processed Locally\n\n");
-        md.push_str("These secrets were processed by **local AI models**. While they were not sent to\n");
+        md.push_str(
+            "These secrets were processed by **local AI models**. While they were not sent to\n",
+        );
         md.push_str("external services, they are stored in Git Notes and should still be handled carefully.\n\n");
 
         md.push_str("| Secret Type | Severity | Model | User | File |\n");
         md.push_str("|-------------|----------|-------|------|------|\n");
         for e in &local_exposures {
-            md.push_str(&format!("| {} | {} | {} | {} | {} |\n",
-                e.secret_type, e.severity, e.model, e.user, e.file));
+            md.push_str(&format!(
+                "| {} | {} | {} | {} | {} |\n",
+                e.secret_type, e.severity, e.model, e.user, e.file
+            ));
         }
         md.push('\n');
     }
@@ -178,7 +204,9 @@ pub fn run(output: &str) {
     md.push_str("   replacement = \"[REDACTED_CUSTOM]\"\n");
     md.push_str("   ```\n");
     md.push_str("2. **Use local models** — Route sensitive work through Ollama or LM Studio.\n");
-    md.push_str("3. **Pre-commit checks** — Run `blameprompt secret-rotation` before each release.\n");
+    md.push_str(
+        "3. **Pre-commit checks** — Run `blameprompt secret-rotation` before each release.\n",
+    );
     md.push_str("4. **Environment isolation** — Never store secrets in source code; use environment variables.\n");
     md.push_str("5. **Provider data policies** — Review AI provider data retention policies and opt out of training.\n\n");
 

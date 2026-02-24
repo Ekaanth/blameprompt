@@ -49,8 +49,8 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
         .unwrap_or("unknown")
         .to_string();
 
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Cannot read transcript: {}", e))?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("Cannot read transcript: {}", e))?;
 
     let mut messages = Vec::new();
     let mut model: Option<String> = None;
@@ -98,7 +98,10 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
             }
         }
 
-        let ts_str = entry.get("timestamp").and_then(|v| v.as_str()).map(String::from);
+        let ts_str = entry
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         match entry.get("type").and_then(|v| v.as_str()) {
             Some("user") => {
@@ -108,7 +111,10 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                     .and_then(|c| c.as_str())
                     .unwrap_or("")
                     .to_string();
-                messages.push(Message::User { text, timestamp: ts_str });
+                messages.push(Message::User {
+                    text,
+                    timestamp: ts_str,
+                });
             }
             Some("assistant") => {
                 let msg = entry.get("message");
@@ -121,16 +127,33 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                 }
 
                 // Parse content array
-                if let Some(content_arr) = msg.and_then(|m| m.get("content")).and_then(|c| c.as_array()) {
+                if let Some(content_arr) = msg
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array())
+                {
                     for item in content_arr {
                         match item.get("type").and_then(|v| v.as_str()) {
                             Some("text") => {
-                                let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                messages.push(Message::Assistant { text, timestamp: ts_str.clone() });
+                                let text = item
+                                    .get("text")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                messages.push(Message::Assistant {
+                                    text,
+                                    timestamp: ts_str.clone(),
+                                });
                             }
                             Some("tool_use") => {
-                                let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                let input = item.get("input").cloned().unwrap_or(serde_json::Value::Null);
+                                let name = item
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let input = item
+                                    .get("input")
+                                    .cloned()
+                                    .unwrap_or(serde_json::Value::Null);
 
                                 // Track modified files
                                 if let Some(fp) = input.get("file_path").and_then(|v| v.as_str()) {
@@ -139,14 +162,23 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                                     }
                                 }
 
-                                messages.push(Message::ToolUse { name, input, timestamp: ts_str.clone() });
+                                messages.push(Message::ToolUse {
+                                    name,
+                                    input,
+                                    timestamp: ts_str.clone(),
+                                });
                             }
                             _ => {}
                         }
                     }
-                } else if let Some(content_str) = msg.and_then(|m| m.get("content")).and_then(|c| c.as_str()) {
+                } else if let Some(content_str) =
+                    msg.and_then(|m| m.get("content")).and_then(|c| c.as_str())
+                {
                     // Content is a plain string
-                    messages.push(Message::Assistant { text: content_str.to_string(), timestamp: ts_str });
+                    messages.push(Message::Assistant {
+                        text: content_str.to_string(),
+                        timestamp: ts_str,
+                    });
                 }
             }
             _ => {}
@@ -311,7 +343,8 @@ mod tests {
 
     #[test]
     fn test_parse_malformed_lines() {
-        let jsonl = "not json\n{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}\nalso not json\n";
+        let jsonl =
+            "not json\n{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}\nalso not json\n";
         let tmp = std::env::temp_dir().join("test_malformed.jsonl");
         std::fs::write(&tmp, jsonl).unwrap();
         let result = parse_claude_jsonl(tmp.to_str().unwrap()).unwrap();
@@ -322,10 +355,14 @@ mod tests {
     #[test]
     fn test_first_user_prompt() {
         let transcript = Transcript {
-            messages: vec![
-                Message::User { text: "write a function".to_string(), timestamp: None },
-            ],
+            messages: vec![Message::User {
+                text: "write a function".to_string(),
+                timestamp: None,
+            }],
         };
-        assert_eq!(first_user_prompt(&transcript), Some("write a function".to_string()));
+        assert_eq!(
+            first_user_prompt(&transcript),
+            Some("write a function".to_string())
+        );
     }
 }

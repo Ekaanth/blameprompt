@@ -26,7 +26,8 @@ pub fn classify(model_id: &str) -> ModelClassification {
     let lower = model_id.to_lowercase();
 
     // Check local prefixes first
-    if lower.starts_with("ollama:") || lower.starts_with("lmstudio:") || lower.starts_with("local:") {
+    if lower.starts_with("ollama:") || lower.starts_with("lmstudio:") || lower.starts_with("local:")
+    {
         let inner = model_id.split_once(':').map(|x| x.1).unwrap_or(model_id);
         let inner_lower = inner.to_lowercase();
         let (family, _vendor) = classify_inner_model(&inner_lower);
@@ -63,7 +64,11 @@ pub fn classify(model_id: &str) -> ModelClassification {
             "Claude (unknown)"
         };
         ("claude", "anthropic", ModelLicense::ClosedSource, display)
-    } else if lower.contains("gpt-4") || lower.contains("gpt-3.5") || lower.contains("o1") || lower.contains("o3") {
+    } else if lower.contains("gpt-4")
+        || lower.contains("gpt-3.5")
+        || lower.contains("o1")
+        || lower.contains("o3")
+    {
         let display = if lower.contains("gpt-4o") {
             "GPT-4o"
         } else if lower.contains("gpt-4") {
@@ -85,21 +90,46 @@ pub fn classify(model_id: &str) -> ModelClassification {
     } else if lower.contains("mixtral") {
         ("mistral", "mistral_ai", ModelLicense::OpenSource, "Mixtral")
     } else if lower.contains("codestral") {
-        ("mistral", "mistral_ai", ModelLicense::OpenSource, "Codestral")
+        (
+            "mistral",
+            "mistral_ai",
+            ModelLicense::OpenSource,
+            "Codestral",
+        )
     } else if lower.contains("mistral") {
         ("mistral", "mistral_ai", ModelLicense::OpenSource, "Mistral")
     } else if lower.contains("deepseek") {
-        ("deepseek", "deepseek_ai", ModelLicense::OpenSource, "DeepSeek")
+        (
+            "deepseek",
+            "deepseek_ai",
+            ModelLicense::OpenSource,
+            "DeepSeek",
+        )
     } else if lower.contains("phi-") {
         ("phi", "microsoft", ModelLicense::OpenSource, "Phi")
     } else if lower.contains("qwen") || lower.contains("codeqwen") {
         ("qwen", "alibaba", ModelLicense::OpenSource, "Qwen")
     } else if lower.contains("command-r") {
-        ("command_r", "cohere", ModelLicense::ClosedSource, "Command R")
+        (
+            "command_r",
+            "cohere",
+            ModelLicense::ClosedSource,
+            "Command R",
+        )
     } else if lower.contains("replit") {
-        ("replit", "replit", ModelLicense::ClosedSource, "Replit Agent")
+        (
+            "replit",
+            "replit",
+            ModelLicense::ClosedSource,
+            "Replit Agent",
+        )
     } else {
-        ("unknown", "unknown", ModelLicense::ClosedSource, "Unknown Model")
+        (
+            "unknown",
+            "unknown",
+            ModelLicense::ClosedSource,
+            "Unknown Model",
+        )
     };
 
     ModelClassification {
@@ -192,7 +222,10 @@ mod tests {
 
     #[test]
     fn test_display_names() {
-        assert_eq!(display_name("claude-sonnet-4-5-20250929"), "Claude Sonnet 4.5");
+        assert_eq!(
+            display_name("claude-sonnet-4-5-20250929"),
+            "Claude Sonnet 4.5"
+        );
         assert_eq!(display_name("claude-opus-4-6"), "Claude Opus 4.6");
     }
 }

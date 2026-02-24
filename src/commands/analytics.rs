@@ -37,10 +37,7 @@ pub struct UserStats {
     pub total_cost: f64,
 }
 
-pub fn generate_report(
-    from: Option<&str>,
-    to: Option<&str>,
-) -> Result<AnalyticsReport, String> {
+pub fn generate_report(from: Option<&str>, to: Option<&str>) -> Result<AnalyticsReport, String> {
     // Get total commits
     let total_commits = count_total_commits()?;
 
@@ -135,7 +132,10 @@ pub fn run(export_format: Option<&str>) {
 
     match export_format {
         Some("json") => {
-            println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            );
         }
         Some("csv") => {
             println!("metric,value");
@@ -144,26 +144,38 @@ pub fn run(export_format: Option<&str>) {
             println!("ai_commit_percentage,{:.1}", report.ai_commit_percentage);
             println!("total_receipts,{}", report.total_receipts);
             println!("total_sessions,{}", report.total_sessions);
-            println!("total_estimated_cost_usd,{:.2}", report.total_estimated_cost_usd);
+            println!(
+                "total_estimated_cost_usd,{:.2}",
+                report.total_estimated_cost_usd
+            );
             println!("total_ai_lines,{}", report.total_ai_lines);
             println!();
             println!("model,sessions,files_modified,total_cost");
             for (model, stats) in &report.by_model {
-                println!("{},{},{},{:.4}", model, stats.sessions, stats.files_modified, stats.total_cost);
+                println!(
+                    "{},{},{},{:.4}",
+                    model, stats.sessions, stats.files_modified, stats.total_cost
+                );
             }
         }
         _ => {
             println!("OVERVIEW");
             println!("========");
             println!("Total commits scanned: {}", report.total_commits_scanned);
-            println!("Commits with AI: {} ({:.1}%)", report.commits_with_ai, report.ai_commit_percentage);
+            println!(
+                "Commits with AI: {} ({:.1}%)",
+                report.commits_with_ai, report.ai_commit_percentage
+            );
             println!("Total sessions: {}", report.total_sessions);
             println!("Total AI lines: {}", report.total_ai_lines);
             println!();
 
             println!("COST");
             println!("====");
-            println!("Total estimated cost: ${:.2}", report.total_estimated_cost_usd);
+            println!(
+                "Total estimated cost: ${:.2}",
+                report.total_estimated_cost_usd
+            );
             if report.total_sessions > 0 {
                 println!(
                     "Avg cost per session: ${:.3}",
@@ -203,11 +215,15 @@ pub fn run(export_format: Option<&str>) {
             println!();
 
             // Collect unique files from audit entries to calculate code origin
-            let all_files: std::collections::HashSet<String> = if let Ok(entries) = audit::collect_audit_entries(None, None, None) {
-                entries.iter().flat_map(|e| e.receipts.iter().map(|r| r.file_path.clone())).collect()
-            } else {
-                std::collections::HashSet::new()
-            };
+            let all_files: std::collections::HashSet<String> =
+                if let Ok(entries) = audit::collect_audit_entries(None, None, None) {
+                    entries
+                        .iter()
+                        .flat_map(|e| e.receipts.iter().map(|r| r.file_path.clone()))
+                        .collect()
+                } else {
+                    std::collections::HashSet::new()
+                };
 
             if !all_files.is_empty() {
                 let mut total_ai_pct = 0.0f64;

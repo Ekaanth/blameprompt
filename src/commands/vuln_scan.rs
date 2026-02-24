@@ -187,9 +187,7 @@ pub fn run(output: &str) {
 
             for vuln in VULN_PATTERNS {
                 // Check file extension filter
-                if !vuln.file_extensions.is_empty()
-                    && !vuln.file_extensions.contains(&file_ext)
-                {
+                if !vuln.file_extensions.is_empty() && !vuln.file_extensions.contains(&file_ext) {
                     continue;
                 }
 
@@ -227,7 +225,10 @@ pub fn run(output: &str) {
     md.push_str("| Metric | Value |\n");
     md.push_str("|--------|-------|\n");
     md.push_str(&format!("| Files scanned | {} |\n", files_scanned));
-    md.push_str(&format!("| AI-generated lines scanned | {} |\n", lines_scanned));
+    md.push_str(&format!(
+        "| AI-generated lines scanned | {} |\n",
+        lines_scanned
+    ));
     md.push_str(&format!("| Total findings | {} |\n", findings.len()));
     md.push_str(&format!("| CRITICAL | {} |\n", critical));
     md.push_str(&format!("| HIGH | {} |\n", high));
@@ -240,7 +241,10 @@ pub fn run(output: &str) {
 
         // Group by severity
         for severity in &["CRITICAL", "HIGH", "MEDIUM", "LOW"] {
-            let sev_findings: Vec<_> = findings.iter().filter(|f| f.severity == *severity).collect();
+            let sev_findings: Vec<_> = findings
+                .iter()
+                .filter(|f| f.severity == *severity)
+                .collect();
             if sev_findings.is_empty() {
                 continue;
             }
@@ -248,8 +252,18 @@ pub fn run(output: &str) {
             md.push_str(&format!("### {} ({})\n\n", severity, sev_findings.len()));
 
             for (i, f) in sev_findings.iter().enumerate() {
-                md.push_str(&format!("#### {}.{} {} — {} ({})\n\n", severity.chars().next().unwrap(), i + 1, f.vuln_name, f.cwe, f.file));
-                md.push_str(&format!("- **File**: `{}` (line {})\n", f.file, f.line_number));
+                md.push_str(&format!(
+                    "#### {}.{} {} — {} ({})\n\n",
+                    severity.chars().next().unwrap(),
+                    i + 1,
+                    f.vuln_name,
+                    f.cwe,
+                    f.file
+                ));
+                md.push_str(&format!(
+                    "- **File**: `{}` (line {})\n",
+                    f.file, f.line_number
+                ));
                 md.push_str(&format!("- **AI Model**: {}\n", f.model));
                 md.push_str(&format!("- **Description**: {}\n", f.description));
                 md.push_str(&format!("- **Fix**: {}\n", f.fix));
@@ -267,7 +281,9 @@ pub fn run(output: &str) {
         md.push_str("|-----|------|-------|\n");
         let mut cwe_counts: HashMap<String, (String, usize)> = HashMap::new();
         for f in &findings {
-            let entry = cwe_counts.entry(f.cwe.clone()).or_insert((f.vuln_name.clone(), 0));
+            let entry = cwe_counts
+                .entry(f.cwe.clone())
+                .or_insert((f.vuln_name.clone(), 0));
             entry.1 += 1;
         }
         let mut cwe_sorted: Vec<_> = cwe_counts.into_iter().collect();
@@ -281,7 +297,9 @@ pub fn run(output: &str) {
     // Recommendations
     md.push_str("## Recommendations\n\n");
     if critical > 0 || high > 0 {
-        md.push_str("1. **Immediate action** — Address all CRITICAL and HIGH findings before deployment.\n");
+        md.push_str(
+            "1. **Immediate action** — Address all CRITICAL and HIGH findings before deployment.\n",
+        );
         md.push_str("2. **Code review** — All AI-generated code touching these patterns needs manual security review.\n");
     }
     md.push_str("3. **Integrate SAST** — Run Semgrep, CodeQL, or Snyk alongside BlamePrompt for deeper analysis.\n");

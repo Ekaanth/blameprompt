@@ -15,7 +15,8 @@ pub fn resolve_binary_path() -> String {
 }
 
 fn pre_commit_hook(binary: &str) -> String {
-    format!(r#"# BlamePrompt pre-commit hook (do not edit between markers)
+    format!(
+        r#"# BlamePrompt pre-commit hook (do not edit between markers)
 {preamble}BLAMEPROMPT="{binary}"
 if [ -x "$BLAMEPROMPT" ]; then
     COUNT=$("$BLAMEPROMPT" staging-count 2>/dev/null || echo "0")
@@ -24,21 +25,29 @@ if [ -x "$BLAMEPROMPT" ]; then
     fi
 fi
 # /BlamePrompt
-"#, preamble = PATH_PREAMBLE, binary = binary)
+"#,
+        preamble = PATH_PREAMBLE,
+        binary = binary
+    )
 }
 
 fn post_commit_hook(binary: &str) -> String {
-    format!(r#"# BlamePrompt post-commit hook (do not edit between markers)
+    format!(
+        r#"# BlamePrompt post-commit hook (do not edit between markers)
 {preamble}BLAMEPROMPT="{binary}"
 if [ -x "$BLAMEPROMPT" ]; then
     "$BLAMEPROMPT" attach 2>/dev/null || true
 fi
 # /BlamePrompt
-"#, preamble = PATH_PREAMBLE, binary = binary)
+"#,
+        preamble = PATH_PREAMBLE,
+        binary = binary
+    )
 }
 
 fn post_checkout_hook(binary: &str) -> String {
-    format!(r#"# BlamePrompt post-checkout hook (do not edit between markers)
+    format!(
+        r#"# BlamePrompt post-checkout hook (do not edit between markers)
 {preamble}BLAMEPROMPT="{binary}"
 # Auto-initialize BlamePrompt in new repos after git clone / git checkout
 if [ -x "$BLAMEPROMPT" ]; then
@@ -51,11 +60,15 @@ if [ -x "$BLAMEPROMPT" ]; then
     git fetch origin refs/notes/blameprompt:refs/notes/blameprompt 2>/dev/null || true
 fi
 # /BlamePrompt
-"#, preamble = PATH_PREAMBLE, binary = binary)
+"#,
+        preamble = PATH_PREAMBLE,
+        binary = binary
+    )
 }
 
 fn post_merge_hook(binary: &str) -> String {
-    format!(r#"# BlamePrompt post-merge hook (do not edit between markers)
+    format!(
+        r#"# BlamePrompt post-merge hook (do not edit between markers)
 {preamble}BLAMEPROMPT="{binary}"
 if [ -x "$BLAMEPROMPT" ]; then
     COUNT=$("$BLAMEPROMPT" staging-count 2>/dev/null || echo "0")
@@ -64,11 +77,15 @@ if [ -x "$BLAMEPROMPT" ]; then
     fi
 fi
 # /BlamePrompt
-"#, preamble = PATH_PREAMBLE, binary = binary)
+"#,
+        preamble = PATH_PREAMBLE,
+        binary = binary
+    )
 }
 
 fn post_rewrite_hook(binary: &str) -> String {
-    format!(r#"# BlamePrompt post-rewrite hook (do not edit between markers)
+    format!(
+        r#"# BlamePrompt post-rewrite hook (do not edit between markers)
 {preamble}BLAMEPROMPT="{binary}"
 # Remap BlamePrompt notes after rebase or amend
 if [ -x "$BLAMEPROMPT" ]; then
@@ -79,28 +96,32 @@ if [ -x "$BLAMEPROMPT" ]; then
     done
 fi
 # /BlamePrompt
-"#, preamble = PATH_PREAMBLE, binary = binary)
+"#,
+        preamble = PATH_PREAMBLE,
+        binary = binary
+    )
 }
 
 fn all_hooks(binary: &str) -> Vec<(&'static str, String)> {
     vec![
-        ("pre-commit",    pre_commit_hook(binary)),
-        ("post-commit",   post_commit_hook(binary)),
+        ("pre-commit", pre_commit_hook(binary)),
+        ("post-commit", post_commit_hook(binary)),
         ("post-checkout", post_checkout_hook(binary)),
-        ("post-merge",    post_merge_hook(binary)),
-        ("post-rewrite",  post_rewrite_hook(binary)),
+        ("post-merge", post_merge_hook(binary)),
+        ("post-rewrite", post_rewrite_hook(binary)),
     ]
 }
 
 fn git_hooks_dir() -> Result<std::path::PathBuf, String> {
-    let repo = git2::Repository::discover(".").map_err(|_| "Not in a git repository. Run this from inside a git repository.".to_string())?;
+    let repo = git2::Repository::discover(".").map_err(|_| {
+        "Not in a git repository. Run this from inside a git repository.".to_string()
+    })?;
     Ok(repo.path().join("hooks"))
 }
 
 pub fn install_hooks() -> Result<(), String> {
     let hooks_dir = git_hooks_dir()?;
-    std::fs::create_dir_all(&hooks_dir)
-        .map_err(|e| format!("Cannot create hooks dir: {}", e))?;
+    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("Cannot create hooks dir: {}", e))?;
 
     let binary = resolve_binary_path();
     for (name, content) in all_hooks(&binary) {
@@ -131,8 +152,7 @@ fn install_hook(hooks_dir: &Path, name: &str, content: &str) -> Result<(), Strin
     } else {
         // Create new hook
         let full = format!("#!/bin/sh\n\n{}", content);
-        std::fs::write(&hook_path, full)
-            .map_err(|e| format!("Cannot write {}: {}", name, e))?;
+        std::fs::write(&hook_path, full).map_err(|e| format!("Cannot write {}: {}", name, e))?;
     }
 
     // Make executable
@@ -154,15 +174,21 @@ pub fn uninstall_hooks() -> Result<(), String> {
         }
     };
 
-    let hook_names = ["pre-commit", "post-commit", "post-checkout", "post-merge", "post-rewrite"];
+    let hook_names = [
+        "pre-commit",
+        "post-commit",
+        "post-checkout",
+        "post-merge",
+        "post-rewrite",
+    ];
     for hook_name in &hook_names {
         let hook_path = hooks_dir.join(hook_name);
         if !hook_path.exists() {
             continue;
         }
 
-        let content = std::fs::read_to_string(&hook_path)
-            .map_err(|e| format!("Cannot read hook: {}", e))?;
+        let content =
+            std::fs::read_to_string(&hook_path).map_err(|e| format!("Cannot read hook: {}", e))?;
 
         if !content.contains("BlamePrompt") {
             continue;
@@ -171,9 +197,11 @@ pub fn uninstall_hooks() -> Result<(), String> {
         let cleaned = remove_between_markers(&content, "# BlamePrompt", "# /BlamePrompt");
 
         if cleaned.trim().is_empty() || cleaned.trim() == "#!/bin/sh" {
-            std::fs::remove_file(&hook_path)
-                .map_err(|e| format!("Cannot delete hook: {}", e))?;
-            println!("  \x1b[1;32m[done]\x1b[0m Removed \x1b[2m.git/hooks/{}\x1b[0m", hook_name);
+            std::fs::remove_file(&hook_path).map_err(|e| format!("Cannot delete hook: {}", e))?;
+            println!(
+                "  \x1b[1;32m[done]\x1b[0m Removed \x1b[2m.git/hooks/{}\x1b[0m",
+                hook_name
+            );
         } else {
             std::fs::write(&hook_path, &cleaned)
                 .map_err(|e| format!("Cannot write hook: {}", e))?;

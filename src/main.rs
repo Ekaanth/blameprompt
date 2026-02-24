@@ -1,7 +1,7 @@
+mod commands;
 mod core;
 mod git;
 mod integrations;
-mod commands;
 
 use clap::{Parser, Subcommand};
 
@@ -115,7 +115,6 @@ enum Commands {
         include_uncommitted: bool,
     },
 
-
     /// Push BlamePrompt notes to origin
     Push,
 
@@ -148,7 +147,6 @@ enum Commands {
         #[arg(long, default_value = "./blameprompt-license-scan.md")]
         output: String,
     },
-
 
     /// Assess AI supply chain risk score
     SupplyChainRisk {
@@ -183,7 +181,6 @@ enum Commands {
 
     /// Attach staged receipts to HEAD as git notes and clear staging (used by git hooks, internal)
     Attach,
-
 }
 
 #[derive(Subcommand)]
@@ -253,7 +250,13 @@ fn main() {
             commands::search::run(&query, limit);
         }
 
-        Commands::Audit { from, to, author, format, include_uncommitted } => {
+        Commands::Audit {
+            from,
+            to,
+            author,
+            format,
+            include_uncommitted,
+        } => {
             commands::audit::run(
                 from.as_deref(),
                 to.as_deref(),
@@ -267,7 +270,13 @@ fn main() {
             commands::analytics::run(export.as_deref());
         }
 
-        Commands::Report { output, from, to, author, include_uncommitted } => {
+        Commands::Report {
+            output,
+            from,
+            to,
+            author,
+            include_uncommitted,
+        } => {
             if let Err(e) = commands::report::generate_report(
                 &output,
                 from.as_deref(),
@@ -296,16 +305,14 @@ fn main() {
             commands::record::run(&session, None);
         }
 
-        Commands::Cache { action } => {
-            match action {
-                CacheAction::Sync => {
-                    if let Err(e) = core::db::sync_from_notes() {
-                        eprintln!("Error: {}", e);
-                        std::process::exit(1);
-                    }
+        Commands::Cache { action } => match action {
+            CacheAction::Sync => {
+                if let Err(e) = core::db::sync_from_notes() {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
                 }
             }
-        }
+        },
 
         Commands::LicenseScan { output } => {
             commands::license_scan::run(&output);
@@ -347,13 +354,16 @@ fn main() {
                         .and_then(|o| String::from_utf8(o.stdout).ok())
                         .map(|s| s.trim().to_string())
                         .unwrap_or_else(|| "HEAD".to_string());
-                    eprintln!("[BlamePrompt] {} receipt(s) attached to {}", data.receipts.len(), head_short);
+                    eprintln!(
+                        "[BlamePrompt] {} receipt(s) attached to {}",
+                        data.receipts.len(),
+                        head_short
+                    );
                 }
                 Err(e) => {
                     eprintln!("[BlamePrompt] Failed to attach receipts: {}", e);
                 }
             }
         }
-
     }
 }

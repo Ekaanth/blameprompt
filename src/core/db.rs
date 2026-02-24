@@ -12,8 +12,7 @@ fn db_path() -> PathBuf {
 
 pub fn get_connection() -> Result<Connection, String> {
     let path = db_path();
-    let conn = Connection::open(&path)
-        .map_err(|e| format!("Cannot open database: {}", e))?;
+    let conn = Connection::open(&path).map_err(|e| format!("Cannot open database: {}", e))?;
 
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS receipts (
@@ -36,8 +35,9 @@ pub fn get_connection() -> Result<Connection, String> {
             line_start INTEGER,
             line_end INTEGER,
             parent_receipt_id TEXT
-        );"
-    ).map_err(|e| format!("Cannot create table: {}", e))?;
+        );",
+    )
+    .map_err(|e| format!("Cannot create table: {}", e))?;
 
     Ok(conn)
 }
@@ -91,7 +91,11 @@ pub fn sync_from_notes() -> Result<(), String> {
         }
     }
 
-    println!("[BlamePrompt] Cached {} receipt(s) from {} commit(s) into SQLite.", count, commits.len());
+    println!(
+        "[BlamePrompt] Cached {} receipt(s) from {} commit(s) into SQLite.",
+        count,
+        commits.len()
+    );
     Ok(())
 }
 
@@ -105,47 +109,56 @@ pub fn search_prompts(query: &str, limit: usize) -> Result<Vec<(String, Receipt)
     ).map_err(|e| format!("Query error: {}", e))?;
 
     let pattern = format!("%{}%", query);
-    let rows = stmt.query_map(params![pattern, limit as i64], |row| {
-        let commit_sha: String = row.get(0)?;
-        let timestamp_str: String = row.get(9)?;
-        let session_start_str: Option<String> = row.get(10)?;
-        let session_end_str: Option<String> = row.get(11)?;
+    let rows = stmt
+        .query_map(params![pattern, limit as i64], |row| {
+            let commit_sha: String = row.get(0)?;
+            let timestamp_str: String = row.get(9)?;
+            let session_start_str: Option<String> = row.get(10)?;
+            let session_end_str: Option<String> = row.get(11)?;
 
-        let timestamp = chrono::DateTime::parse_from_rfc3339(&timestamp_str)
-            .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(|_| chrono::Utc::now());
+            let timestamp = chrono::DateTime::parse_from_rfc3339(&timestamp_str)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now());
 
-        let session_start = session_start_str.and_then(|s| {
-            chrono::DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&chrono::Utc))
-        });
-        let session_end = session_end_str.and_then(|s| {
-            chrono::DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&chrono::Utc))
-        });
+            let session_start = session_start_str.and_then(|s| {
+                chrono::DateTime::parse_from_rfc3339(&s)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+            });
+            let session_end = session_end_str.and_then(|s| {
+                chrono::DateTime::parse_from_rfc3339(&s)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+            });
 
-        let line_start: u32 = row.get(16)?;
-        let line_end: u32 = row.get(17)?;
+            let line_start: u32 = row.get(16)?;
+            let line_end: u32 = row.get(17)?;
 
-        Ok((commit_sha, Receipt {
-            id: row.get(1)?,
-            provider: row.get(2)?,
-            model: row.get(3)?,
-            session_id: row.get(4)?,
-            prompt_summary: row.get(5)?,
-            prompt_hash: row.get(6)?,
-            message_count: row.get(7)?,
-            cost_usd: row.get(8)?,
-            timestamp,
-            session_start,
-            session_end,
-            session_duration_secs: row.get(12)?,
-            ai_response_time_secs: row.get(13)?,
-            user: row.get(14)?,
-            file_path: row.get(15)?,
-            line_range: (line_start, line_end),
-            parent_receipt_id: row.get(18)?,
-            conversation: None, // SQLite cache doesn't store conversation turns
-        }))
-    }).map_err(|e| format!("Query error: {}", e))?;
+            Ok((
+                commit_sha,
+                Receipt {
+                    id: row.get(1)?,
+                    provider: row.get(2)?,
+                    model: row.get(3)?,
+                    session_id: row.get(4)?,
+                    prompt_summary: row.get(5)?,
+                    prompt_hash: row.get(6)?,
+                    message_count: row.get(7)?,
+                    cost_usd: row.get(8)?,
+                    timestamp,
+                    session_start,
+                    session_end,
+                    session_duration_secs: row.get(12)?,
+                    ai_response_time_secs: row.get(13)?,
+                    user: row.get(14)?,
+                    file_path: row.get(15)?,
+                    line_range: (line_start, line_end),
+                    parent_receipt_id: row.get(18)?,
+                    conversation: None, // SQLite cache doesn't store conversation turns
+                },
+            ))
+        })
+        .map_err(|e| format!("Query error: {}", e))?;
 
     let mut results = Vec::new();
     for r in rows.flatten() {

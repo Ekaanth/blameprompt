@@ -1,8 +1,7 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize, Clone)]
-#[derive(Default)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct BlamePromptConfig {
     #[serde(default)]
     pub redaction: RedactionConfig,
@@ -41,7 +40,6 @@ fn default_redaction_mode() -> String {
 fn default_max_prompt_length() -> usize {
     2000
 }
-
 
 impl Default for RedactionConfig {
     fn default() -> Self {
@@ -82,20 +80,24 @@ fn find_config_file() -> Option<PathBuf> {
 
 pub fn load_config() -> BlamePromptConfig {
     match find_config_file() {
-        Some(path) => {
-            match std::fs::read_to_string(&path) {
-                Ok(content) => {
-                    toml::from_str(&content).unwrap_or_else(|e| {
-                        eprintln!("[BlamePrompt] Warning: Failed to parse {}: {}", path.display(), e);
-                        BlamePromptConfig::default()
-                    })
-                }
-                Err(e) => {
-                    eprintln!("[BlamePrompt] Warning: Failed to read {}: {}", path.display(), e);
-                    BlamePromptConfig::default()
-                }
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(content) => toml::from_str(&content).unwrap_or_else(|e| {
+                eprintln!(
+                    "[BlamePrompt] Warning: Failed to parse {}: {}",
+                    path.display(),
+                    e
+                );
+                BlamePromptConfig::default()
+            }),
+            Err(e) => {
+                eprintln!(
+                    "[BlamePrompt] Warning: Failed to read {}: {}",
+                    path.display(),
+                    e
+                );
+                BlamePromptConfig::default()
             }
-        }
+        },
         None => BlamePromptConfig::default(),
     }
 }
@@ -131,7 +133,10 @@ store_full_conversation = true
         let config: BlamePromptConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.redaction.mode, "hash");
         assert_eq!(config.redaction.custom_patterns.len(), 1);
-        assert_eq!(config.redaction.custom_patterns[0].replacement, "[REDACTED_INTERNAL_URL]");
+        assert_eq!(
+            config.redaction.custom_patterns[0].replacement,
+            "[REDACTED_INTERNAL_URL]"
+        );
         assert_eq!(config.redaction.disable_patterns, vec!["BEARER_TOKEN"]);
         assert_eq!(config.capture.max_prompt_length, 5000);
         assert!(config.capture.store_full_conversation);

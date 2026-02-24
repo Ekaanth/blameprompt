@@ -49,13 +49,15 @@ const INJECTION_PATTERNS: &[InjectionPattern] = &[
         name: "Environment Variable Exfiltration",
         pattern: r"(?i)(process\.env|os\.environ|std::env::var|env::var).*?(fetch|http|request|send|post|axios)",
         severity: "CRITICAL",
-        description: "Environment variables accessed near network calls - potential secret exfiltration",
+        description:
+            "Environment variables accessed near network calls - potential secret exfiltration",
     },
     InjectionPattern {
         name: "Hidden Process Spawn",
         pattern: r"(?i)(child_process|subprocess|Process\.Start|Runtime\.exec|Command::new)\s*\(",
         severity: "HIGH",
-        description: "Process spawning detected - verify this is intentional and inputs are validated",
+        description:
+            "Process spawning detected - verify this is intentional and inputs are validated",
     },
     InjectionPattern {
         name: "File System Write",
@@ -195,7 +197,10 @@ pub fn run(output: &str) {
     md.push_str(&format!("> Generated: {}\n\n", now));
 
     // Summary
-    let critical = detections.iter().filter(|d| d.severity == "CRITICAL").count();
+    let critical = detections
+        .iter()
+        .filter(|d| d.severity == "CRITICAL")
+        .count();
     let high = detections.iter().filter(|d| d.severity == "HIGH").count();
     let medium = detections.iter().filter(|d| d.severity == "MEDIUM").count();
 
@@ -203,9 +208,18 @@ pub fn run(output: &str) {
     md.push_str("| Metric | Value |\n");
     md.push_str("|--------|-------|\n");
     md.push_str(&format!("| Files scanned | {} |\n", files_scanned));
-    md.push_str(&format!("| AI-generated lines scanned | {} |\n", lines_scanned));
-    md.push_str(&format!("| Code pattern detections | {} |\n", detections.len()));
-    md.push_str(&format!("| Suspicious AI responses | {} |\n", prompt_flags.len()));
+    md.push_str(&format!(
+        "| AI-generated lines scanned | {} |\n",
+        lines_scanned
+    ));
+    md.push_str(&format!(
+        "| Code pattern detections | {} |\n",
+        detections.len()
+    ));
+    md.push_str(&format!(
+        "| Suspicious AI responses | {} |\n",
+        prompt_flags.len()
+    ));
     md.push_str(&format!("| CRITICAL findings | {} |\n", critical));
     md.push_str(&format!("| HIGH findings | {} |\n", high));
     md.push_str(&format!("| MEDIUM findings | {} |\n\n", medium));
@@ -216,30 +230,47 @@ pub fn run(output: &str) {
         md.push_str("Patterns detected in AI-generated code that may indicate prompt injection or backdoors:\n\n");
 
         for severity in &["CRITICAL", "HIGH", "MEDIUM"] {
-            let sev_detections: Vec<_> = detections.iter().filter(|d| d.severity == *severity).collect();
+            let sev_detections: Vec<_> = detections
+                .iter()
+                .filter(|d| d.severity == *severity)
+                .collect();
             if sev_detections.is_empty() {
                 continue;
             }
 
             md.push_str(&format!("### {} ({})\n\n", severity, sev_detections.len()));
             for d in &sev_detections {
-                md.push_str(&format!("- **{}** in `{}` line {}\n", d.pattern_name, d.file, d.line_number));
+                md.push_str(&format!(
+                    "- **{}** in `{}` line {}\n",
+                    d.pattern_name, d.file, d.line_number
+                ));
                 md.push_str(&format!("  - Model: {}\n", d.model));
                 md.push_str(&format!("  - {}\n", d.description));
                 md.push_str(&format!("  - Code: `{}`\n\n", d.line_content));
             }
         }
     } else {
-        md.push_str("## Code-Level Detections\n\nNo suspicious patterns detected in AI-generated code.\n\n");
+        md.push_str(
+            "## Code-Level Detections\n\nNo suspicious patterns detected in AI-generated code.\n\n",
+        );
     }
 
     // Suspicious AI responses
     if !prompt_flags.is_empty() {
         md.push_str("## Suspicious AI Responses\n\n");
-        md.push_str("The following AI responses contain phrases that may indicate prompt injection:\n\n");
+        md.push_str(
+            "The following AI responses contain phrases that may indicate prompt injection:\n\n",
+        );
         for (receipt_id, phrase, context) in &prompt_flags {
-            let id_short = if receipt_id.len() >= 8 { &receipt_id[..8] } else { receipt_id };
-            md.push_str(&format!("- **Receipt {}**: Detected `{}`\n", id_short, phrase));
+            let id_short = if receipt_id.len() >= 8 {
+                &receipt_id[..8]
+            } else {
+                receipt_id
+            };
+            md.push_str(&format!(
+                "- **Receipt {}**: Detected `{}`\n",
+                id_short, phrase
+            ));
             md.push_str(&format!("  > {}\n\n", context));
         }
     }

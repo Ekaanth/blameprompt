@@ -1,4 +1,4 @@
-use crate::{integrations::claude_hooks, git::hooks};
+use crate::{git::hooks, integrations::claude_hooks};
 use std::path::Path;
 
 /// Marker file to track that global setup has been done.
@@ -44,16 +44,18 @@ pub fn auto_setup() {
 
 /// Shared install banner for auto_setup (stderr) and run_init (stdout).
 fn print_install_banner(use_stderr: bool) {
-    let home = dirs::home_dir().map(|h| h.display().to_string()).unwrap_or_else(|| "~".to_string());
+    let home = dirs::home_dir()
+        .map(|h| h.display().to_string())
+        .unwrap_or_else(|| "~".to_string());
 
     // ANSI color shortcuts
-    let c = "\x1b[36m";     // cyan
-    let b = "\x1b[1m";      // bold
-    let d = "\x1b[2m";      // dim
-    let r = "\x1b[0m";      // reset
-    let bg = "\x1b[1;32m";  // bold green
-    let bc = "\x1b[1;36m";  // bold cyan
-    let bw = "\x1b[1;37m";  // bold white
+    let c = "\x1b[36m"; // cyan
+    let b = "\x1b[1m"; // bold
+    let d = "\x1b[2m"; // dim
+    let r = "\x1b[0m"; // reset
+    let bg = "\x1b[1;32m"; // bold green
+    let bc = "\x1b[1;36m"; // bold cyan
+    let bw = "\x1b[1;37m"; // bold white
 
     // Collect all lines into a Vec, then print to stderr or stdout
     let lines = vec![
@@ -120,8 +122,7 @@ pub fn install_git_template() -> Result<(), String> {
     for (name, content) in hooks::all_hook_entries(&binary) {
         let hook_path = hooks_dir.join(name);
         let full = format!("#!/bin/sh\n\n{}", content);
-        std::fs::write(&hook_path, &full)
-            .map_err(|e| format!("Cannot write {}: {}", name, e))?;
+        std::fs::write(&hook_path, &full).map_err(|e| format!("Cannot write {}: {}", name, e))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -146,7 +147,9 @@ pub fn install_git_template() -> Result<(), String> {
     // Configure git to use this template directory
     let status = std::process::Command::new("git")
         .args([
-            "config", "--global", "init.templateDir",
+            "config",
+            "--global",
+            "init.templateDir",
             &template_dir.to_string_lossy(),
         ])
         .status()
@@ -177,7 +180,9 @@ pub fn auto_init_blameprompt(repo_root: &str) -> Result<(), String> {
     let gitignore = Path::new(repo_root).join(".gitignore");
     let needs_entry = if gitignore.exists() {
         let content = std::fs::read_to_string(&gitignore).unwrap_or_default();
-        !content.lines().any(|l| l.trim() == ".blameprompt/" || l.trim() == ".blameprompt")
+        !content
+            .lines()
+            .any(|l| l.trim() == ".blameprompt/" || l.trim() == ".blameprompt")
     } else {
         true
     };
@@ -188,8 +193,11 @@ pub fn auto_init_blameprompt(repo_root: &str) -> Result<(), String> {
             .open(&gitignore)
             .map_err(|e| format!("Cannot write .gitignore: {}", e))?;
         use std::io::Write;
-        writeln!(file, "\n# BlamePrompt staging (auto-generated)\n.blameprompt/")
-            .map_err(|e| format!("Cannot append to .gitignore: {}", e))?;
+        writeln!(
+            file,
+            "\n# BlamePrompt staging (auto-generated)\n.blameprompt/"
+        )
+        .map_err(|e| format!("Cannot append to .gitignore: {}", e))?;
     }
 
     Ok(())
@@ -202,8 +210,7 @@ pub fn run_init(global: bool) -> Result<(), String> {
         mark_setup_done();
         print_install_banner(false);
     } else {
-        let cwd = std::env::current_dir()
-            .map_err(|e| format!("Cannot get cwd: {}", e))?;
+        let cwd = std::env::current_dir().map_err(|e| format!("Cannot get cwd: {}", e))?;
 
         git2::Repository::discover(&cwd)
             .map_err(|_| "Not inside a git repository. Run 'git init' first.".to_string())?;
@@ -212,12 +219,12 @@ pub fn run_init(global: bool) -> Result<(), String> {
         hooks::install_hooks()?;
 
         // ANSI color shortcuts
-        let c = "\x1b[36m";     // cyan
-        let b = "\x1b[1m";      // bold
-        let d = "\x1b[2m";      // dim
-        let r = "\x1b[0m";      // reset
-        let bg = "\x1b[1;32m";  // bold green
-        let bw = "\x1b[1;37m";  // bold white
+        let c = "\x1b[36m"; // cyan
+        let b = "\x1b[1m"; // bold
+        let d = "\x1b[2m"; // dim
+        let r = "\x1b[0m"; // reset
+        let bg = "\x1b[1;32m"; // bold green
+        let bw = "\x1b[1;37m"; // bold white
 
         println!();
         println!("Installing BlamePrompt in this repo...");
@@ -232,7 +239,9 @@ pub fn run_init(global: bool) -> Result<(), String> {
         println!();
         println!("{b}Get started:{r}");
         println!("  {c}blameprompt blame{r} {d}<file>{r}       {d}Line-by-line AI vs human attribution{r}");
-        println!("  {c}blameprompt show{r}  {d}<commit>{r}     {d}View receipts attached to a commit{r}");
+        println!(
+            "  {c}blameprompt show{r}  {d}<commit>{r}     {d}View receipts attached to a commit{r}"
+        );
         println!("  {c}blameprompt audit{r}              {d}Full audit trail{r}");
         println!("  {c}blameprompt --help{r}             {d}See all commands{r}");
         println!();

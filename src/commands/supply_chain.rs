@@ -17,8 +17,8 @@ fn relative_path(path: &str) -> String {
 
 struct RiskFactor {
     name: String,
-    score: f64,     // 0.0 - 10.0
-    weight: f64,    // how much this factor contributes
+    score: f64,  // 0.0 - 10.0
+    weight: f64, // how much this factor contributes
     detail: String,
 }
 
@@ -31,18 +31,23 @@ fn calculate_risk_factors(entries: &[audit::AuditEntry]) -> Vec<RiskFactor> {
     }
 
     // 1. Model diversity risk — more models = more supply chain surface
-    let unique_models: std::collections::HashSet<_> = all_receipts.iter().map(|r| &r.model).collect();
+    let unique_models: std::collections::HashSet<_> =
+        all_receipts.iter().map(|r| &r.model).collect();
     let model_count = unique_models.len();
     let model_score = (model_count as f64 * 2.0).min(10.0);
     factors.push(RiskFactor {
         name: "Model Diversity".to_string(),
         score: model_score,
         weight: 0.15,
-        detail: format!("{} unique models used — each is a separate supply chain dependency", model_count),
+        detail: format!(
+            "{} unique models used — each is a separate supply chain dependency",
+            model_count
+        ),
     });
 
     // 2. Cloud vs local — cloud models have higher supply chain risk
-    let cloud_count = all_receipts.iter()
+    let cloud_count = all_receipts
+        .iter()
         .filter(|r| model_classifier::classify(&r.model).deployment == ModelDeployment::Cloud)
         .count();
     let cloud_pct = cloud_count as f64 / all_receipts.len() as f64;
@@ -51,12 +56,17 @@ fn calculate_risk_factors(entries: &[audit::AuditEntry]) -> Vec<RiskFactor> {
         name: "Cloud Dependency".to_string(),
         score: cloud_score,
         weight: 0.20,
-        detail: format!("{:.0}% of AI code generated via cloud APIs ({} of {} receipts)",
-            cloud_pct * 100.0, cloud_count, all_receipts.len()),
+        detail: format!(
+            "{:.0}% of AI code generated via cloud APIs ({} of {} receipts)",
+            cloud_pct * 100.0,
+            cloud_count,
+            all_receipts.len()
+        ),
     });
 
     // 3. Open-source model risk — licensing and supply chain integrity
-    let oss_count = all_receipts.iter()
+    let oss_count = all_receipts
+        .iter()
         .filter(|r| model_classifier::classify(&r.model).license == ModelLicense::OpenSource)
         .count();
     let oss_pct = oss_count as f64 / all_receipts.len() as f64;
@@ -65,7 +75,10 @@ fn calculate_risk_factors(entries: &[audit::AuditEntry]) -> Vec<RiskFactor> {
         name: "Open-Source Model Usage".to_string(),
         score: oss_score,
         weight: 0.10,
-        detail: format!("{:.0}% of AI code from open-source models (verify model integrity)", oss_pct * 100.0),
+        detail: format!(
+            "{:.0}% of AI code from open-source models (verify model integrity)",
+            oss_pct * 100.0
+        ),
     });
 
     // 4. Prompt sensitivity — check for secrets/sensitive data in prompts
@@ -82,14 +95,20 @@ fn calculate_risk_factors(entries: &[audit::AuditEntry]) -> Vec<RiskFactor> {
         name: "Prompt Sensitivity".to_string(),
         score: sensitivity_score,
         weight: 0.20,
-        detail: format!("{} of {} prompts contain or reference sensitive data",
-            prompts_with_secrets, all_receipts.len()),
+        detail: format!(
+            "{} of {} prompts contain or reference sensitive data",
+            prompts_with_secrets,
+            all_receipts.len()
+        ),
     });
 
     // 5. Critical file exposure — AI touching sensitive paths
-    let sensitive_patterns = ["auth", "crypto", "security", "secret", "password", "key", "token",
-        "payment", "billing", "admin", "config", "env", ".pem", ".key"];
-    let sensitive_files: Vec<_> = all_receipts.iter()
+    let sensitive_patterns = [
+        "auth", "crypto", "security", "secret", "password", "key", "token", "payment", "billing",
+        "admin", "config", "env", ".pem", ".key",
+    ];
+    let sensitive_files: Vec<_> = all_receipts
+        .iter()
         .filter(|r| {
             let lower = r.file_path.to_lowercase();
             sensitive_patterns.iter().any(|p| lower.contains(p))
@@ -101,8 +120,11 @@ fn calculate_risk_factors(entries: &[audit::AuditEntry]) -> Vec<RiskFactor> {
         name: "Critical File Exposure".to_string(),
         score: file_score,
         weight: 0.20,
-        detail: format!("{} of {} AI-generated code changes touch security-sensitive files",
-            sensitive_files.len(), all_receipts.len()),
+        detail: format!(
+            "{} of {} AI-generated code changes touch security-sensitive files",
+            sensitive_files.len(),
+            all_receipts.len()
+        ),
     });
 
     // 6. Human review coverage — commits with multiple receipts suggest less review
@@ -125,8 +147,10 @@ fn calculate_risk_factors(entries: &[audit::AuditEntry]) -> Vec<RiskFactor> {
         name: "Human Review Gap".to_string(),
         score: review_score,
         weight: 0.15,
-        detail: format!("{} of {} commits have multiple AI receipts (may indicate less human review)",
-            multi_receipt_commits, total_commits),
+        detail: format!(
+            "{} of {} commits have multiple AI receipts (may indicate less human review)",
+            multi_receipt_commits, total_commits
+        ),
     });
 
     factors
@@ -151,9 +175,9 @@ pub fn run(output: &str) {
     let factors = calculate_risk_factors(&entries);
 
     // Calculate weighted overall score
-    let overall_score: f64 = factors.iter()
-        .map(|f| f.score * f.weight)
-        .sum::<f64>() / factors.iter().map(|f| f.weight).sum::<f64>() * 10.0;
+    let overall_score: f64 = factors.iter().map(|f| f.score * f.weight).sum::<f64>()
+        / factors.iter().map(|f| f.weight).sum::<f64>()
+        * 10.0;
     let overall_score = overall_score.min(10.0);
 
     let risk_level = if overall_score >= 7.0 {
@@ -173,12 +197,19 @@ pub fn run(output: &str) {
 
     // Overall score
     md.push_str("## Overall Risk Score\n\n");
-    md.push_str(&format!("**Score: {:.1} / 10.0** — **{}**\n\n", overall_score, risk_level));
+    md.push_str(&format!(
+        "**Score: {:.1} / 10.0** — **{}**\n\n",
+        overall_score, risk_level
+    ));
     md.push_str("```\n");
     let filled = (overall_score * 3.0) as usize;
     let empty = 30 - filled;
-    md.push_str(&format!("[{}{}] {:.1}/10\n",
-        "#".repeat(filled), "-".repeat(empty), overall_score));
+    md.push_str(&format!(
+        "[{}{}] {:.1}/10\n",
+        "#".repeat(filled),
+        "-".repeat(empty),
+        overall_score
+    ));
     md.push_str("```\n\n");
 
     // Summary
@@ -187,9 +218,11 @@ pub fn run(output: &str) {
     md.push_str("|--------|-------|\n");
     md.push_str(&format!("| Total AI receipts | {} |\n", all_receipts.len()));
     md.push_str(&format!("| Commits analyzed | {} |\n", entries.len()));
-    let unique_providers: std::collections::HashSet<_> = all_receipts.iter().map(|r| &r.provider).collect();
+    let unique_providers: std::collections::HashSet<_> =
+        all_receipts.iter().map(|r| &r.provider).collect();
     md.push_str(&format!("| AI providers | {} |\n", unique_providers.len()));
-    let unique_models: std::collections::HashSet<_> = all_receipts.iter().map(|r| &r.model).collect();
+    let unique_models: std::collections::HashSet<_> =
+        all_receipts.iter().map(|r| &r.model).collect();
     md.push_str(&format!("| Unique models | {} |\n", unique_models.len()));
     md.push_str(&format!("| Risk level | {} |\n\n", risk_level));
 
@@ -198,12 +231,23 @@ pub fn run(output: &str) {
     md.push_str("| Factor | Score | Weight | Detail |\n");
     md.push_str("|--------|-------|--------|--------|\n");
     for f in &factors {
-        let level = if f.score >= 7.0 { "CRITICAL" }
-            else if f.score >= 5.0 { "HIGH" }
-            else if f.score >= 3.0 { "MEDIUM" }
-            else { "LOW" };
-        md.push_str(&format!("| {} | {:.1} ({}) | {:.0}% | {} |\n",
-            f.name, f.score, level, f.weight * 100.0, f.detail));
+        let level = if f.score >= 7.0 {
+            "CRITICAL"
+        } else if f.score >= 5.0 {
+            "HIGH"
+        } else if f.score >= 3.0 {
+            "MEDIUM"
+        } else {
+            "LOW"
+        };
+        md.push_str(&format!(
+            "| {} | {:.1} ({}) | {:.0}% | {} |\n",
+            f.name,
+            f.score,
+            level,
+            f.weight * 100.0,
+            f.detail
+        ));
     }
     md.push('\n');
 
@@ -226,15 +270,20 @@ pub fn run(output: &str) {
             ModelLicense::OpenSource => "Open Source",
             ModelLicense::ClosedSource => "Closed Source",
         };
-        md.push_str(&format!("| {} | {} | {:?} | {} | {} | {} |\n",
-            c.display_name, c.vendor, c.deployment, license_str, count, risk));
+        md.push_str(&format!(
+            "| {} | {} | {:?} | {} | {} | {} |\n",
+            c.display_name, c.vendor, c.deployment, license_str, count, risk
+        ));
     }
     md.push('\n');
 
     // High-risk files
-    let sensitive_patterns = ["auth", "crypto", "security", "secret", "password", "key", "token",
-        "payment", "billing", "admin", "config", "env", ".pem", ".key"];
-    let sensitive_files: Vec<_> = all_receipts.iter()
+    let sensitive_patterns = [
+        "auth", "crypto", "security", "secret", "password", "key", "token", "payment", "billing",
+        "admin", "config", "env", ".pem", ".key",
+    ];
+    let sensitive_files: Vec<_> = all_receipts
+        .iter()
         .filter(|r| {
             let lower = r.file_path.to_lowercase();
             sensitive_patterns.iter().any(|p| lower.contains(p))
@@ -246,9 +295,14 @@ pub fn run(output: &str) {
         md.push_str("| File | Model | Provider | Lines |\n");
         md.push_str("|------|-------|----------|-------|\n");
         for r in &sensitive_files {
-            md.push_str(&format!("| {} | {} | {} | {}-{} |\n",
-                relative_path(&r.file_path), r.model, r.provider,
-                r.line_range.0, r.line_range.1));
+            md.push_str(&format!(
+                "| {} | {} | {} | {}-{} |\n",
+                relative_path(&r.file_path),
+                r.model,
+                r.provider,
+                r.line_range.0,
+                r.line_range.1
+            ));
         }
         md.push('\n');
     }
@@ -261,10 +315,14 @@ pub fn run(output: &str) {
         md.push_str("3. **Mandatory code review** — Require human review for all AI-generated security-critical code.\n");
     }
     if overall_score >= 3.0 {
-        md.push_str("4. **Model integrity verification** — Verify checksums of local model weights.\n");
+        md.push_str(
+            "4. **Model integrity verification** — Verify checksums of local model weights.\n",
+        );
         md.push_str("5. **Provider access audit** — Review which team members have access to each AI provider.\n");
     }
-    md.push_str("6. **Regular risk assessment** — Re-run this scan weekly or before each release.\n");
+    md.push_str(
+        "6. **Regular risk assessment** — Re-run this scan weekly or before each release.\n",
+    );
     md.push_str("7. **SBOM inclusion** — Include AI model dependencies in your Software Bill of Materials.\n\n");
 
     md.push_str("---\n\n");

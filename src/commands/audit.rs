@@ -1,5 +1,5 @@
-use crate::git::notes;
 use crate::core::receipt::Receipt;
+use crate::git::notes;
 use chrono::Utc;
 use comfy_table::Table;
 use serde::Serialize;
@@ -102,9 +102,17 @@ pub fn collect_staged_entries() -> Vec<AuditEntry> {
         return Vec::new();
     }
     // Group staged receipts into a single AuditEntry with commit_sha="uncommitted"
-    let total_ai_lines: u32 = staging.receipts.iter().map(|r| {
-        if r.line_range.1 >= r.line_range.0 { r.line_range.1 - r.line_range.0 + 1 } else { 0 }
-    }).sum();
+    let total_ai_lines: u32 = staging
+        .receipts
+        .iter()
+        .map(|r| {
+            if r.line_range.1 >= r.line_range.0 {
+                r.line_range.1 - r.line_range.0 + 1
+            } else {
+                0
+            }
+        })
+        .sum();
     let total_cost_usd: f64 = staging.receipts.iter().map(|r| r.cost_usd).sum();
 
     vec![AuditEntry {
@@ -167,7 +175,10 @@ fn write_receipt_md(md: &mut String, r: &Receipt) {
     md.push_str(&format!("| Messages | {} |\n", r.message_count));
     md.push_str(&format!("| Cost | ${:.4} |\n", r.cost_usd));
     md.push_str(&format!("| File | {} |\n", rel_file));
-    md.push_str(&format!("| Lines | {}-{} |\n\n", r.line_range.0, r.line_range.1));
+    md.push_str(&format!(
+        "| Lines | {}-{} |\n\n",
+        r.line_range.0, r.line_range.1
+    ));
     md.push_str("**Prompt Summary:**\n");
     md.push_str(&format!("> {}\n\n", r.prompt_summary));
     md.push_str(&format!("**Prompt Hash:** `{}`\n\n", r.prompt_hash));
@@ -183,9 +194,19 @@ fn write_receipt_md(md: &mut String, r: &Receipt) {
                 _ => "**???**",
             };
             let content_preview: String = t.content.chars().take(500).collect();
-            md.push_str(&format!("- `Turn {}` {}: {}\n", t.turn, role_label, content_preview));
+            md.push_str(&format!(
+                "- `Turn {}` {}: {}\n",
+                t.turn, role_label, content_preview
+            ));
             if let Some(ref files) = t.files_touched {
-                md.push_str(&format!("  - Files: {}\n", files.iter().map(|f| relative_path(f)).collect::<Vec<_>>().join(", ")));
+                md.push_str(&format!(
+                    "  - Files: {}\n",
+                    files
+                        .iter()
+                        .map(|f| relative_path(f))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
         }
         md.push('\n');
@@ -197,8 +218,14 @@ fn write_receipt_md(md: &mut String, r: &Receipt) {
 fn generate_markdown(entries: &[AuditEntry]) -> String {
     let now = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
 
-    let committed: Vec<&AuditEntry> = entries.iter().filter(|e| e.commit_sha != "uncommitted").collect();
-    let uncommitted: Vec<&AuditEntry> = entries.iter().filter(|e| e.commit_sha == "uncommitted").collect();
+    let committed: Vec<&AuditEntry> = entries
+        .iter()
+        .filter(|e| e.commit_sha != "uncommitted")
+        .collect();
+    let uncommitted: Vec<&AuditEntry> = entries
+        .iter()
+        .filter(|e| e.commit_sha == "uncommitted")
+        .collect();
 
     let total_receipts: usize = entries.iter().map(|e| e.receipts.len()).sum();
     let total_lines: u32 = entries.iter().map(|e| e.total_ai_lines).sum();
@@ -216,7 +243,10 @@ fn generate_markdown(entries: &[AuditEntry]) -> String {
     md.push_str(&format!("| Total receipts | {} |\n", total_receipts));
     md.push_str(&format!("| Total AI lines | {} |\n", total_lines));
     md.push_str(&format!("| Estimated cost | ${:.2} |\n", total_cost));
-    md.push_str(&format!("| Uncommitted receipts | {} |\n\n", uncommitted_receipts));
+    md.push_str(&format!(
+        "| Uncommitted receipts | {} |\n\n",
+        uncommitted_receipts
+    ));
 
     if !committed.is_empty() {
         md.push_str("## Committed Changes\n");
@@ -226,7 +256,10 @@ fn generate_markdown(entries: &[AuditEntry]) -> String {
             } else {
                 &entry.commit_sha
             };
-            md.push_str(&format!("### Commit: {} - {}\n", sha_display, entry.commit_message));
+            md.push_str(&format!(
+                "### Commit: {} - {}\n",
+                sha_display, entry.commit_message
+            ));
             md.push_str(&format!("- **Date**: {}\n", entry.commit_date));
             md.push_str(&format!("- **Author**: {}\n\n", entry.commit_author));
 
@@ -278,7 +311,10 @@ pub fn run(
 
     match format {
         "json" => {
-            println!("{}", serde_json::to_string_pretty(&entries).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&entries).unwrap_or_default()
+            );
         }
         "csv" => {
             println!("commit_sha,date,author,message,provider,model,session_id,message_count,cost_usd,file,line_range,prompt_summary,prompt_hash");
@@ -333,7 +369,16 @@ pub fn run(
 
             let mut table = Table::new();
             table.set_header(vec![
-                "Commit", "Date", "Author", "Provider", "Model", "Messages", "Cost", "File", "Lines", "Prompt Summary",
+                "Commit",
+                "Date",
+                "Author",
+                "Provider",
+                "Model",
+                "Messages",
+                "Cost",
+                "File",
+                "Lines",
+                "Prompt Summary",
             ]);
 
             for entry in &entries {

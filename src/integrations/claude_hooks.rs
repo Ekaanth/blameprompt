@@ -17,14 +17,13 @@ pub fn install() -> Result<(), String> {
 
     // Create ~/.claude/ if it doesn't exist
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Cannot create ~/.claude/: {}", e))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("Cannot create ~/.claude/: {}", e))?;
     }
 
     // Read existing settings or create empty object
     let mut settings: serde_json::Value = if path.exists() {
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Cannot read settings: {}", e))?;
+        let content =
+            std::fs::read_to_string(&path).map_err(|e| format!("Cannot read settings: {}", e))?;
         serde_json::from_str(&content).unwrap_or_else(|_| json!({}))
     } else {
         json!({})
@@ -47,16 +46,19 @@ pub fn install() -> Result<(), String> {
 
     // All hook events and their matchers for comprehensive auditing
     let hook_configs: Vec<(&str, Option<&str>)> = vec![
-        ("PreToolUse",        Some("Write|Edit|MultiEdit|Bash")),
-        ("PostToolUse",       Some("Write|Edit|MultiEdit|Bash|Read|Glob|Grep|WebFetch|WebSearch|Task")),
+        ("PreToolUse", Some("Write|Edit|MultiEdit|Bash")),
+        (
+            "PostToolUse",
+            Some("Write|Edit|MultiEdit|Bash|Read|Glob|Grep|WebFetch|WebSearch|Task"),
+        ),
         ("PostToolUseFailure", Some("Write|Edit|MultiEdit|Bash")),
-        ("UserPromptSubmit",  None),
-        ("SessionStart",      None),
-        ("SessionEnd",        None),
-        ("Stop",              None),
-        ("SubagentStart",     None),
-        ("SubagentStop",      None),
-        ("Notification",      None),
+        ("UserPromptSubmit", None),
+        ("SessionStart", None),
+        ("SessionEnd", None),
+        ("Stop", None),
+        ("SubagentStart", None),
+        ("SubagentStop", None),
+        ("Notification", None),
     ];
 
     // Ensure hooks object exists
@@ -89,8 +91,7 @@ pub fn install() -> Result<(), String> {
     // Write back
     let json_str = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize: {}", e))?;
-    std::fs::write(&path, json_str)
-        .map_err(|e| format!("Failed to write settings: {}", e))?;
+    std::fs::write(&path, json_str).map_err(|e| format!("Failed to write settings: {}", e))?;
 
     println!("Installed Claude Code hooks in {}", path.display());
     Ok(())
@@ -104,16 +105,23 @@ pub fn uninstall() -> Result<(), String> {
         return Ok(());
     }
 
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Cannot read settings: {}", e))?;
-    let mut settings: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Invalid JSON: {}", e))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("Cannot read settings: {}", e))?;
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?;
 
     if let Some(hooks) = settings.get_mut("hooks") {
         let all_events = [
-            "PreToolUse", "PostToolUse", "PostToolUseFailure",
-            "UserPromptSubmit", "SessionStart", "SessionEnd",
-            "Stop", "SubagentStart", "SubagentStop", "Notification",
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "UserPromptSubmit",
+            "SessionStart",
+            "SessionEnd",
+            "Stop",
+            "SubagentStart",
+            "SubagentStop",
+            "Notification",
         ];
         for event in &all_events {
             if let Some(arr) = hooks.get_mut(*event).and_then(|v| v.as_array_mut()) {
@@ -135,8 +143,7 @@ pub fn uninstall() -> Result<(), String> {
 
     let json_str = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize: {}", e))?;
-    std::fs::write(&path, json_str)
-        .map_err(|e| format!("Failed to write: {}", e))?;
+    std::fs::write(&path, json_str).map_err(|e| format!("Failed to write: {}", e))?;
 
     println!("  \x1b[1;32m[done]\x1b[0m Removed Claude Code hooks \x1b[2m(~/.claude/settings.json)\x1b[0m");
     Ok(())

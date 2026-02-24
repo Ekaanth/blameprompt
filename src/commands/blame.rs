@@ -66,11 +66,15 @@ pub fn calculate_code_origin(file: &str) -> Option<CodeOriginStats> {
         if let Some(sha) = line_commits.get(&line_num) {
             if let Some(receipts) = sha_receipts.get(sha) {
                 for r in receipts {
-                    if (r.file_path == file || file.ends_with(&r.file_path) || r.file_path.ends_with(file))
-                        && line_num >= r.line_range.0 && line_num <= r.line_range.1 {
-                            ai_lines += 1;
-                            break;
-                        }
+                    if (r.file_path == file
+                        || file.ends_with(&r.file_path)
+                        || r.file_path.ends_with(file))
+                        && line_num >= r.line_range.0
+                        && line_num <= r.line_range.1
+                    {
+                        ai_lines += 1;
+                        break;
+                    }
                 }
             }
         }
@@ -212,15 +216,19 @@ pub fn run(file: &str) {
             if source == "Human" {
                 if let Some(receipts) = sha_receipts.get(sha) {
                     for r in receipts {
-                        if (r.file_path == file || file.ends_with(&r.file_path) || r.file_path.ends_with(file))
-                            && line_num >= r.line_range.0 && line_num <= r.line_range.1 {
-                                source = "AI";
-                                provider = r.provider.clone();
-                                model = r.model.clone();
-                                cost = format!("${:.4}", r.cost_usd);
-                                prompt = r.prompt_summary.chars().take(30).collect();
-                                break;
-                            }
+                        if (r.file_path == file
+                            || file.ends_with(&r.file_path)
+                            || r.file_path.ends_with(file))
+                            && line_num >= r.line_range.0
+                            && line_num <= r.line_range.1
+                        {
+                            source = "AI";
+                            provider = r.provider.clone();
+                            model = r.model.clone();
+                            cost = format!("${:.4}", r.cost_usd);
+                            prompt = r.prompt_summary.chars().take(30).collect();
+                            break;
+                        }
                     }
                 }
             }
@@ -254,6 +262,9 @@ pub fn run(file: &str) {
         let ai_pct = (ai_line_count as f64 / total_lines as f64) * 100.0;
         let human_pct = 100.0 - ai_pct;
         println!();
-        println!("Code Origin: {:.1}% AI-generated, {:.1}% human", ai_pct, human_pct);
+        println!(
+            "Code Origin: {:.1}% AI-generated, {:.1}% human",
+            ai_pct, human_pct
+        );
     }
 }

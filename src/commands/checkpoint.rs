@@ -1,5 +1,5 @@
-use crate::core::{config, pricing, receipt::Receipt, redact, transcript};
 use crate::commands::staging;
+use crate::core::{config, pricing, receipt::Receipt, redact, transcript};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -15,9 +15,15 @@ struct HookInput {
 fn parse_hook_input(json_str: &str) -> HookInput {
     let v: serde_json::Value = serde_json::from_str(json_str).unwrap_or(serde_json::Value::Null);
     HookInput {
-        transcript_path: v.get("transcript_path").and_then(|v| v.as_str()).map(String::from),
+        transcript_path: v
+            .get("transcript_path")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         cwd: v.get("cwd").and_then(|v| v.as_str()).map(String::from),
-        hook_event_name: v.get("hook_event_name").and_then(|v| v.as_str()).map(String::from),
+        hook_event_name: v
+            .get("hook_event_name")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         file_path: v
             .get("tool_input")
             .and_then(|ti| ti.get("file_path"))
@@ -43,12 +49,17 @@ fn get_changed_lines(cwd: &str, file_path: &str) -> (u32, u32) {
                     if let Some(plus_part) = line.split('+').nth(1) {
                         let nums: &str = plus_part.split(' ').next().unwrap_or("0");
                         let parts: Vec<&str> = nums.split(',').collect();
-                        let line_start: u32 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+                        let line_start: u32 =
+                            parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
                         let count: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
                         if start == 0 || line_start < start {
                             start = line_start;
                         }
-                        let line_end = if count == 0 { line_start } else { line_start + count - 1 };
+                        let line_end = if count == 0 {
+                            line_start
+                        } else {
+                            line_start + count - 1
+                        };
                         if line_end > end {
                             end = line_end;
                         }
@@ -141,11 +152,16 @@ pub fn run(agent: &str, hook_input_source: &str) {
     let prompt_hash = format!("sha256:{:x}", hasher.finalize());
 
     // Estimate cost
-    let total_chars: usize = parsed.transcript.messages.iter().map(|m| match m {
-        transcript::Message::User { text, .. } => text.len(),
-        transcript::Message::Assistant { text, .. } => text.len(),
-        transcript::Message::ToolUse { .. } => 0,
-    }).sum();
+    let total_chars: usize = parsed
+        .transcript
+        .messages
+        .iter()
+        .map(|m| match m {
+            transcript::Message::User { text, .. } => text.len(),
+            transcript::Message::Assistant { text, .. } => text.len(),
+            transcript::Message::ToolUse { .. } => 0,
+        })
+        .sum();
     let estimated_tokens = pricing::estimate_tokens_from_chars(total_chars);
     let cost = pricing::estimate_cost(&model, estimated_tokens / 2, estimated_tokens / 2);
 
@@ -199,7 +215,11 @@ pub fn run(agent: &str, hook_input_source: &str) {
             file_path: file_path.clone(),
             line_range,
             parent_receipt_id: parent_id,
-            conversation: if conversation_turns.is_empty() { None } else { Some(conversation_turns.clone()) },
+            conversation: if conversation_turns.is_empty() {
+                None
+            } else {
+                Some(conversation_turns.clone())
+            },
         };
 
         staging::add_receipt(&receipt);

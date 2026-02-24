@@ -1,5 +1,5 @@
-use crate::core::{config, pricing, receipt::Receipt, redact, transcript};
 use crate::commands::staging;
+use crate::core::{config, pricing, receipt::Receipt, redact, transcript};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 
@@ -40,11 +40,16 @@ pub fn run(session_path: &str, provider: Option<&str>) {
     hasher.update(full_text.as_bytes());
     let prompt_hash = format!("sha256:{:x}", hasher.finalize());
 
-    let total_chars: usize = parsed.transcript.messages.iter().map(|m| match m {
-        transcript::Message::User { text, .. } => text.len(),
-        transcript::Message::Assistant { text, .. } => text.len(),
-        transcript::Message::ToolUse { .. } => 0,
-    }).sum();
+    let total_chars: usize = parsed
+        .transcript
+        .messages
+        .iter()
+        .map(|m| match m {
+            transcript::Message::User { text, .. } => text.len(),
+            transcript::Message::Assistant { text, .. } => text.len(),
+            transcript::Message::ToolUse { .. } => 0,
+        })
+        .sum();
     let estimated_tokens = pricing::estimate_tokens_from_chars(total_chars);
     let cost = pricing::estimate_cost(&model, estimated_tokens / 2, estimated_tokens / 2);
 
@@ -77,14 +82,21 @@ pub fn run(session_path: &str, provider: Option<&str>) {
             file_path: file_path.clone(),
             line_range: (1, 1), // Unknown without diff context
             parent_receipt_id: None,
-            conversation: if conversation_turns.is_empty() { None } else { Some(conversation_turns.clone()) },
+            conversation: if conversation_turns.is_empty() {
+                None
+            } else {
+                Some(conversation_turns.clone())
+            },
         };
 
         staging::add_receipt(&receipt);
         receipt_count += 1;
     }
 
-    println!("[BlamePrompt] Recorded {} receipt(s) from session {}", receipt_count, parsed.session_id);
+    println!(
+        "[BlamePrompt] Recorded {} receipt(s) from session {}",
+        receipt_count, parsed.session_id
+    );
     println!("  Provider: {}", provider);
     println!("  Model: {}", model);
     println!("  Messages: {}", message_count);

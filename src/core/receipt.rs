@@ -5,8 +5,8 @@ use uuid::Uuid;
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ConversationTurn {
     pub turn: u32,
-    pub role: String,          // "user", "assistant", "tool"
-    pub content: String,       // redacted message text
+    pub role: String,    // "user", "assistant", "tool"
+    pub content: String, // redacted message text
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,7 +109,11 @@ impl NotePayload {
         NotePayload {
             blameprompt_version: env!("CARGO_PKG_VERSION").to_string(),
             receipts,
-            file_mappings: if file_mappings.is_empty() { None } else { Some(file_mappings) },
+            file_mappings: if file_mappings.is_empty() {
+                None
+            } else {
+                Some(file_mappings)
+            },
             code_origin: None,
         }
     }

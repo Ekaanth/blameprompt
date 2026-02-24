@@ -3,14 +3,14 @@ use std::path::Path;
 
 pub fn run(keep_notes: bool, purge: bool) -> Result<(), String> {
     // ANSI color shortcuts
-    let bg = "\x1b[1;32m";  // bold green
-    let br = "\x1b[1;31m";  // bold red
-    let by = "\x1b[1;33m";  // bold yellow
-    let bc = "\x1b[1;36m";  // bold cyan
-    let bw = "\x1b[1;37m";  // bold white
-    let b  = "\x1b[1m";     // bold
-    let d  = "\x1b[2m";     // dim
-    let r  = "\x1b[0m";     // reset
+    let bg = "\x1b[1;32m"; // bold green
+    let br = "\x1b[1;31m"; // bold red
+    let by = "\x1b[1;33m"; // bold yellow
+    let bc = "\x1b[1;36m"; // bold cyan
+    let bw = "\x1b[1;37m"; // bold white
+    let b = "\x1b[1m"; // bold
+    let d = "\x1b[2m"; // dim
+    let r = "\x1b[0m"; // reset
 
     println!();
     println!("  {bw}Uninstalling BlamePrompt...{r}");
@@ -20,7 +20,10 @@ pub fn run(keep_notes: bool, purge: bool) -> Result<(), String> {
     if purge {
         let note_count = count_git_notes();
         println!("  {br}WARNING:{r} {b}This will permanently delete:{r}");
-        println!("    {d}-{r} All {by}{}{r} Git Note(s) {d}(receipt history){r}", note_count);
+        println!(
+            "    {d}-{r} All {by}{}{r} Git Note(s) {d}(receipt history){r}",
+            note_count
+        );
         println!("    {d}-{r} SQLite database {d}(~/.blameprompt/prompts.db){r}");
         println!("    {d}-{r} All hooks {d}(Claude Code + git, globally and in this repo){r}");
         println!("    {d}-{r} Git template directory");
@@ -72,7 +75,9 @@ pub fn run(keep_notes: bool, purge: bool) -> Result<(), String> {
     println!("  {bg}✓{r} Global hooks removed");
     println!("  {bg}✓{r} Git template removed");
     if !purge {
-        println!("  {bg}✓{r} Git Notes preserved {d}(your receipt history is still in the repo){r}");
+        println!(
+            "  {bg}✓{r} Git Notes preserved {d}(your receipt history is still in the repo){r}"
+        );
     }
     println!();
 
@@ -95,14 +100,15 @@ fn remove_gitignore_entry() -> Result<(), String> {
         return Ok(());
     }
 
-    let content = std::fs::read_to_string(gitignore)
-        .map_err(|e| format!("Cannot read .gitignore: {}", e))?;
+    let content =
+        std::fs::read_to_string(gitignore).map_err(|e| format!("Cannot read .gitignore: {}", e))?;
 
     let cleaned: Vec<&str> = content
         .lines()
         .filter(|line| {
             let trimmed = line.trim();
-            trimmed != ".blameprompt/" && trimmed != ".blameprompt"
+            trimmed != ".blameprompt/"
+                && trimmed != ".blameprompt"
                 && !trimmed.contains("# BlamePrompt staging")
         })
         .collect();
@@ -115,8 +121,7 @@ fn remove_gitignore_entry() -> Result<(), String> {
         if !result.ends_with('\n') {
             result.push('\n');
         }
-        std::fs::write(gitignore, result)
-            .map_err(|e| format!("Cannot write .gitignore: {}", e))?;
+        std::fs::write(gitignore, result).map_err(|e| format!("Cannot write .gitignore: {}", e))?;
         println!("  \x1b[1;32m[done]\x1b[0m Cleaned .gitignore");
     }
     Ok(())
@@ -168,7 +173,9 @@ fn remove_git_notes() -> Result<(), String> {
 
             let _ = std::process::Command::new("git")
                 .args([
-                    "config", "--unset", "remote.origin.fetch",
+                    "config",
+                    "--unset",
+                    "remote.origin.fetch",
                     "+refs/notes/blameprompt:refs/notes/blameprompt",
                 ])
                 .output();
@@ -191,9 +198,7 @@ fn count_git_notes() -> usize {
         .output();
 
     match output {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout).lines().count()
-        }
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).lines().count(),
         _ => 0,
     }
 }

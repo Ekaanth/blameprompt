@@ -26,9 +26,12 @@ pub fn run(file: &str) {
     println!();
 
     // Count by type
-    let mut counts: std::collections::HashMap<String, (usize, String)> = std::collections::HashMap::new();
+    let mut counts: std::collections::HashMap<String, (usize, String)> =
+        std::collections::HashMap::new();
     for d in &result.detections {
-        let entry = counts.entry(d.secret_type.clone()).or_insert((0, d.severity.clone()));
+        let entry = counts
+            .entry(d.secret_type.clone())
+            .or_insert((0, d.severity.clone()));
         entry.0 += 1;
     }
 

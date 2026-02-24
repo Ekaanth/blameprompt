@@ -37,12 +37,22 @@ pub fn run(query: &str, limit: usize) {
         return;
     }
 
-    println!("Search results for \"{}\": {} match(es)", query, matches.len());
+    println!(
+        "Search results for \"{}\": {} match(es)",
+        query,
+        matches.len()
+    );
     println!();
 
     let mut table = Table::new();
     table.set_header(vec![
-        "Commit", "Provider", "Model", "File", "Lines", "Cost", "Prompt Summary",
+        "Commit",
+        "Provider",
+        "Model",
+        "File",
+        "Lines",
+        "Cost",
+        "Prompt Summary",
     ]);
 
     for (sha, r) in &matches {
@@ -63,6 +73,9 @@ pub fn run(query: &str, limit: usize) {
     println!("{table}");
 
     if matches.len() >= limit {
-        println!("\n(showing first {} results, use --limit to see more)", limit);
+        println!(
+            "\n(showing first {} results, use --limit to see more)",
+            limit
+        );
     }
 }

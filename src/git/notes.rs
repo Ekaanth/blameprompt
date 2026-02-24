@@ -1,5 +1,5 @@
-use crate::core::receipt::NotePayload;
 use crate::commands::staging::StagingData;
+use crate::core::receipt::NotePayload;
 use std::process::{Command, Stdio};
 
 pub fn attach_receipts_to_head(staging: &StagingData) -> Result<(), String> {
@@ -12,7 +12,16 @@ pub fn attach_receipts_to_head(staging: &StagingData) -> Result<(), String> {
         .map_err(|e| format!("Failed to serialize: {}", e))?;
 
     let mut child = Command::new("git")
-        .args(["notes", "--ref", "refs/notes/blameprompt", "add", "-f", "-F", "-", "HEAD"])
+        .args([
+            "notes",
+            "--ref",
+            "refs/notes/blameprompt",
+            "add",
+            "-f",
+            "-F",
+            "-",
+            "HEAD",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

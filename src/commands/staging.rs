@@ -32,7 +32,9 @@ fn ensure_staging_dir() {
     let gitignore = Path::new(".gitignore");
     let needs_entry = if gitignore.exists() {
         let content = std::fs::read_to_string(gitignore).unwrap_or_default();
-        !content.lines().any(|l| l.trim() == ".blameprompt/" || l.trim() == ".blameprompt")
+        !content
+            .lines()
+            .any(|l| l.trim() == ".blameprompt/" || l.trim() == ".blameprompt")
     } else {
         true
     };
