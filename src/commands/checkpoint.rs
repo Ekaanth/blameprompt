@@ -188,11 +188,8 @@ pub fn run(agent: &str, hook_input_source: &str) {
 
     match input.hook_event_name.as_deref() {
         Some("PostToolUse") => {
-            match input.tool_name.as_deref() {
-                Some("Write" | "Edit" | "MultiEdit") => {
-                    handle_file_change(agent, &input);
-                }
-                _ => {} // skip non-writing tools
+            if let Some("Write" | "Edit" | "MultiEdit") = input.tool_name.as_deref() {
+                handle_file_change(agent, &input);
             }
         }
         Some("Stop") => {
