@@ -3,7 +3,6 @@
 # Usage: curl -sSL https://blameprompt.com/install.sh | bash
 set -e
 
-VERSION="0.1.0"
 REPO="ekaanth/blameprompt"
 BINARY_NAME="blameprompt"
 INSTALL_DIR="${BLAMEPROMPT_INSTALL_DIR:-$HOME/.local/bin}"
@@ -58,15 +57,26 @@ check_deps() {
     done
 }
 
+fetch_latest_version() {
+    VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/')"
+    if [ -z "$VERSION" ]; then
+        error "Could not detect latest version. Check https://github.com/${REPO}/releases"
+    fi
+}
+
 main() {
     printf "\n"
-    printf "  ${CYAN}BlamePrompt Installer${RESET} ${DIM}v%s${RESET}\n" "$VERSION"
+    printf "  ${CYAN}BlamePrompt Installer${RESET}\n"
     printf "  ${DIM}Track AI-generated code in Git${RESET}\n"
     printf "\n"
 
     check_deps
     detect_platform
 
+    info "Fetching latest release..."
+    fetch_latest_version
+    info "Latest version: v${VERSION}"
     info "Detected platform: ${OS}/${ARCH}"
 
     # Build download URL

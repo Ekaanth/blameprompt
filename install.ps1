@@ -2,7 +2,6 @@
 # Usage: irm https://blameprompt.com/install.ps1 | iex
 $ErrorActionPreference = "Stop"
 
-$Version = "0.1.0"
 $Repo = "ekaanth/blameprompt"
 $BinaryName = "blameprompt"
 
@@ -13,10 +12,19 @@ function Write-Info($msg) { Write-Host "  [info] " -ForegroundColor Green -NoNew
 function Write-Err($msg) { Write-Host "  [error] " -ForegroundColor Red -NoNewline; Write-Host $msg; exit 1 }
 
 Write-Host ""
-Write-Host "  BlamePrompt Installer" -ForegroundColor Cyan -NoNewline
-Write-Host " v$Version" -ForegroundColor DarkGray
+Write-Host "  BlamePrompt Installer" -ForegroundColor Cyan
 Write-Host "  Track AI-generated code in Git" -ForegroundColor DarkGray
 Write-Host ""
+
+# Fetch latest version from GitHub API
+Write-Info "Fetching latest release..."
+try {
+    $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -UseBasicParsing
+    $Version = $Release.tag_name -replace '^v', ''
+} catch {
+    Write-Err "Could not detect latest version. Check https://github.com/$Repo/releases"
+}
+Write-Info "Latest version: v$Version"
 
 # Detect architecture
 $Arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture

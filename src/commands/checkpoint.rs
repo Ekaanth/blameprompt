@@ -118,8 +118,9 @@ pub fn run(agent: &str, hook_input_source: &str) {
     // Read from stdin
     let json_str = if hook_input_source == "stdin" {
         let mut buf = String::new();
-        if std::io::stdin().read_to_string(&mut buf).is_err() {
-            return; // Silent failure
+        if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
+            eprintln!("[BlamePrompt] Failed to read hook input from stdin: {}", e);
+            return;
         }
         buf
     } else {
@@ -136,7 +137,13 @@ pub fn run(agent: &str, hook_input_source: &str) {
     // Need transcript path for PostToolUse
     let transcript_path = match input.transcript_path {
         Some(p) => p,
-        None => return,
+        None => {
+            eprintln!(
+                "[BlamePrompt] No transcript_path in hook input (event: {:?})",
+                input.hook_event_name
+            );
+            return;
+        }
     };
 
     let cwd = input.cwd.unwrap_or_else(|| ".".to_string());
@@ -144,7 +151,13 @@ pub fn run(agent: &str, hook_input_source: &str) {
     // Parse JSONL transcript
     let parsed = match transcript::parse_claude_jsonl(&transcript_path) {
         Ok(p) => p,
-        Err(_) => return, // Silent failure
+        Err(e) => {
+            eprintln!(
+                "[BlamePrompt] Failed to parse transcript {}: {}",
+                transcript_path, e
+            );
+            return;
+        }
     };
 
     let cfg = config::load_config();

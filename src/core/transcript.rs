@@ -220,8 +220,89 @@ pub fn first_user_prompt(transcript: &Transcript) -> Option<String> {
     None
 }
 
+/// Maximum conversation turns stored per receipt.
+const MAX_CONVERSATION_TURNS: usize = 50;
+
+/// Check if an assistant message has substance (not just a short transition).
+fn is_substantive_message(text: &str) -> bool {
+    if text.len() < 50 {
+        let lower = text.to_lowercase();
+        let transitional = [
+            "let me ",
+            "now let me",
+            "now build",
+            "now update",
+            "now create",
+            "now I need",
+            "now add",
+            "now fix",
+            "now run",
+            "now check",
+            "now install",
+            "now rebuild",
+            "now rewrite",
+            "now verify",
+        ];
+        if transitional.iter().any(|p| lower.starts_with(p)) {
+            return false;
+        }
+        if lower.ends_with(':') {
+            return false;
+        }
+    }
+    true
+}
+
+/// Strip an absolute path to just the filename.
+fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Produce a concise one-line summary of a tool invocation.
+/// Examples: `Bash(command: "git status")`, `Write(file: "main.rs")`
+fn tool_summary(name: &str, input: &serde_json::Value) -> String {
+    let arg = match name {
+        "Bash" => input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                let truncated: String = s.chars().take(80).collect();
+                if s.chars().count() > 80 {
+                    format!("command: \"{}...\"", truncated)
+                } else {
+                    format!("command: \"{}\"", truncated)
+                }
+            }),
+        "Write" | "Edit" | "MultiEdit" | "Read" => input
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .map(|s| format!("file: \"{}\"", basename(s))),
+        "Grep" => input
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                let truncated: String = s.chars().take(60).collect();
+                format!("pattern: \"{}\"", truncated)
+            }),
+        "Glob" => input
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .map(|s| format!("pattern: \"{}\"", s)),
+        _ => input
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .map(|s| format!("file: \"{}\"", basename(s))),
+    };
+
+    match arg {
+        Some(a) => format!("{}({})", name, a),
+        None => format!("{}()", name),
+    }
+}
+
 /// Extract structured conversation turns for storage in receipts.
-/// Each turn has a role, content (truncated), and optional tool/file info.
+/// Produces a concise history: keeps user prompts + substantive AI responses,
+/// collapses consecutive tool calls into single summary turns.
 pub fn extract_conversation_turns(
     transcript: &Transcript,
     max_turn_length: usize,
@@ -231,9 +312,11 @@ pub fn extract_conversation_turns(
 
     let mut turns = Vec::new();
     let mut turn_idx = 0u32;
+    let messages = &transcript.messages;
+    let mut i = 0;
 
-    for msg in &transcript.messages {
-        match msg {
+    while i < messages.len() {
+        match &messages[i] {
             Message::User { text, .. } => {
                 if !text.is_empty() {
                     let truncated: String = text.chars().take(max_turn_length).collect();
@@ -246,9 +329,10 @@ pub fn extract_conversation_turns(
                     });
                     turn_idx += 1;
                 }
+                i += 1;
             }
             Message::Assistant { text, .. } => {
-                if !text.is_empty() {
+                if !text.is_empty() && is_substantive_message(text) {
                     let truncated: String = text.chars().take(max_turn_length).collect();
                     turns.push(ConversationTurn {
                         turn: turn_idx,
@@ -259,23 +343,76 @@ pub fn extract_conversation_turns(
                     });
                     turn_idx += 1;
                 }
+                i += 1;
             }
-            Message::ToolUse { name, input, .. } => {
-                let files: Option<Vec<String>> = input
-                    .get("file_path")
-                    .and_then(|v| v.as_str())
-                    .map(|fp| vec![fp.to_string()]);
+            Message::ToolUse { .. } => {
+                // Collapse consecutive tool calls into one summary turn
+                let mut tool_summaries: Vec<String> = Vec::new();
+                let mut all_files: Vec<String> = Vec::new();
+                let mut tool_names_seen: Vec<String> = Vec::new();
+
+                while i < messages.len() {
+                    if let Message::ToolUse { name, input, .. } = &messages[i] {
+                        let summary = tool_summary(name, input);
+                        if !tool_summaries.contains(&summary) {
+                            tool_summaries.push(summary);
+                        }
+                        if !tool_names_seen.contains(name) {
+                            tool_names_seen.push(name.clone());
+                        }
+                        if let Some(fp) = input.get("file_path").and_then(|v| v.as_str()) {
+                            let display_path = fp.rsplit('/').next().unwrap_or(fp).to_string();
+                            if !all_files.contains(&display_path) {
+                                all_files.push(display_path);
+                            }
+                        }
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                let content = redact_fn(&tool_summaries.join(", "));
 
                 turns.push(ConversationTurn {
                     turn: turn_idx,
                     role: "tool".to_string(),
-                    content: format!("{}()", name),
-                    tool_name: Some(name.clone()),
-                    files_touched: files,
+                    content,
+                    tool_name: if tool_names_seen.len() == 1 {
+                        Some(tool_names_seen[0].clone())
+                    } else {
+                        None
+                    },
+                    files_touched: if all_files.is_empty() {
+                        None
+                    } else {
+                        Some(all_files)
+                    },
                 });
                 turn_idx += 1;
             }
         }
+    }
+
+    // Cap turns: keep first 5 (initial context) + last N (most recent work)
+    if turns.len() > MAX_CONVERSATION_TURNS {
+        let mut capped = turns[..5].to_vec();
+        capped.push(ConversationTurn {
+            turn: 5,
+            role: "assistant".to_string(),
+            content: format!(
+                "... ({} turns omitted) ...",
+                turns.len() - MAX_CONVERSATION_TURNS
+            ),
+            tool_name: None,
+            files_touched: None,
+        });
+        capped.extend_from_slice(&turns[turns.len() - (MAX_CONVERSATION_TURNS - 6)..]);
+        // Renumber
+        for (idx, t) in capped.iter_mut().enumerate() {
+            t.turn = idx as u32;
+        }
+        turns = capped;
     }
 
     turns
@@ -364,5 +501,92 @@ mod tests {
             first_user_prompt(&transcript),
             Some("write a function".to_string())
         );
+    }
+
+    #[test]
+    fn test_tool_summary_bash() {
+        let input = serde_json::json!({"command": "git status"});
+        assert_eq!(
+            tool_summary("Bash", &input),
+            r#"Bash(command: "git status")"#
+        );
+    }
+
+    #[test]
+    fn test_tool_summary_bash_truncation() {
+        let long_cmd = "a".repeat(100);
+        let input = serde_json::json!({"command": long_cmd});
+        let result = tool_summary("Bash", &input);
+        assert!(result.contains("...\""), "Missing truncation marker: {}", result);
+        // 80 char command + wrapper "Bash(command: \"...\")" ~ 100 chars total
+        assert!(!result.contains(&"a".repeat(100)), "Command not truncated");
+    }
+
+    #[test]
+    fn test_tool_summary_write() {
+        let input = serde_json::json!({"file_path": "/Users/someone/project/src/main.rs", "content": "..."});
+        assert_eq!(
+            tool_summary("Write", &input),
+            r#"Write(file: "main.rs")"#
+        );
+    }
+
+    #[test]
+    fn test_tool_summary_grep() {
+        let input = serde_json::json!({"pattern": "fn main"});
+        assert_eq!(
+            tool_summary("Grep", &input),
+            r#"Grep(pattern: "fn main")"#
+        );
+    }
+
+    #[test]
+    fn test_tool_summary_unknown_with_file() {
+        let input = serde_json::json!({"file_path": "/home/user/test.py"});
+        assert_eq!(
+            tool_summary("CustomTool", &input),
+            r#"CustomTool(file: "test.py")"#
+        );
+    }
+
+    #[test]
+    fn test_tool_summary_unknown_no_args() {
+        let input = serde_json::json!({"some_key": "value"});
+        assert_eq!(tool_summary("CustomTool", &input), "CustomTool()");
+    }
+
+    #[test]
+    fn test_extract_turns_with_tool_summaries() {
+        let transcript = Transcript {
+            messages: vec![
+                Message::User {
+                    text: "fix the bug".to_string(),
+                    timestamp: None,
+                },
+                Message::ToolUse {
+                    name: "Bash".to_string(),
+                    input: serde_json::json!({"command": "git diff"}),
+                    timestamp: None,
+                },
+                Message::ToolUse {
+                    name: "Write".to_string(),
+                    input: serde_json::json!({"file_path": "/home/user/src/main.rs", "content": "..."}),
+                    timestamp: None,
+                },
+                Message::Assistant {
+                    text: "I fixed the bug by updating main.rs".to_string(),
+                    timestamp: None,
+                },
+            ],
+        };
+
+        let turns = extract_conversation_turns(&transcript, 1000, &|s| s.to_string());
+        assert_eq!(turns.len(), 3);
+
+        let tool_turn = &turns[1];
+        assert_eq!(tool_turn.role, "tool");
+        assert!(tool_turn.content.contains(r#"Bash(command: "git diff")"#));
+        assert!(tool_turn.content.contains(r#"Write(file: "main.rs")"#));
+        assert_eq!(tool_turn.files_touched, Some(vec!["main.rs".to_string()]));
     }
 }

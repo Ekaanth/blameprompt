@@ -74,6 +74,18 @@ pub fn redact_with_report_and_config(text: &str, config: &RedactionConfig) -> Re
             "TOKEN",
             "MEDIUM",
         ),
+        (
+            r"[a-zA-Z0-9_.-]+@[a-zA-Z0-9._-]{2,}",
+            "[REDACTED_HOST]",
+            "SHELL_PROMPT",
+            "MEDIUM",
+        ),
+        (
+            r"(?:/Users/|/home/)[a-zA-Z0-9_.-]+",
+            "[REDACTED_HOME]",
+            "HOME_PATH",
+            "LOW",
+        ),
     ];
 
     // Apply built-in patterns (skip disabled ones)
@@ -299,5 +311,26 @@ mod tests {
         let result = redact_with_report_and_config(text, &config);
         assert!(result.redacted_text.contains("[SHA256:"));
         assert!(!result.redacted_text.contains("sk-ant"));
+    }
+
+    #[test]
+    fn test_redact_shell_prompt() {
+        let text = "(base) metaquity@Abhisheks-MacBook-Pro-2 blameprompt % blameprompt pull";
+        let redacted = redact_secrets(text);
+        assert!(!redacted.contains("metaquity@"), "Username leaked: {}", redacted);
+        assert!(redacted.contains("[REDACTED_HOST]"), "Host not redacted: {}", redacted);
+        // Rest of prompt preserved
+        assert!(redacted.contains("(base)"), "Env prefix lost: {}", redacted);
+        assert!(redacted.contains("blameprompt pull"), "Command lost: {}", redacted);
+    }
+
+    #[test]
+    fn test_redact_simple_shell_prompt() {
+        let text = "user@hostname $ ls -la";
+        let redacted = redact_secrets(text);
+        assert!(redacted.contains("[REDACTED_HOST]"));
+        assert!(!redacted.contains("user@hostname"));
+        // Command preserved
+        assert!(redacted.contains("$ ls -la"));
     }
 }
