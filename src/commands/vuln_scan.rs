@@ -162,7 +162,8 @@ pub fn run(output: &str) {
 
     // Scan each AI-generated file region
     for r in &all_receipts {
-        let file_path = &r.file_path;
+      for fc in r.all_file_changes() {
+        let file_path = &fc.path;
         let content = match std::fs::read_to_string(file_path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -172,8 +173,8 @@ pub fn run(output: &str) {
         let lines: Vec<&str> = content.lines().collect();
 
         // Only scan lines within the AI-generated range
-        let start = r.line_range.0.saturating_sub(1) as usize;
-        let end = (r.line_range.1 as usize).min(lines.len());
+        let start = fc.line_range.0.saturating_sub(1) as usize;
+        let end = (fc.line_range.1 as usize).min(lines.len());
 
         if start >= lines.len() {
             continue;
@@ -208,6 +209,7 @@ pub fn run(output: &str) {
                 }
             }
         }
+      } // for fc in all_file_changes
     }
 
     // Generate report

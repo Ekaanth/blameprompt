@@ -220,6 +220,45 @@ pub fn first_user_prompt(transcript: &Transcript) -> Option<String> {
     None
 }
 
+/// Returns the Nth (1-based) non-empty user prompt in the transcript.
+pub fn nth_user_prompt(transcript: &Transcript, n: u32) -> Option<String> {
+    let mut count = 0u32;
+    for msg in &transcript.messages {
+        if let Message::User { text, .. } = msg {
+            if !text.is_empty() {
+                count += 1;
+                if count == n {
+                    let truncated: String = text.chars().take(200).collect();
+                    return Some(truncated);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Returns the last (most recent) non-empty user prompt in the transcript.
+pub fn last_user_prompt(transcript: &Transcript) -> Option<String> {
+    transcript.messages.iter().rev().find_map(|msg| {
+        if let Message::User { text, .. } = msg {
+            if !text.is_empty() {
+                let truncated: String = text.chars().take(200).collect();
+                return Some(truncated);
+            }
+        }
+        None
+    })
+}
+
+/// Count the number of user prompts in the transcript.
+pub fn count_user_prompts(transcript: &Transcript) -> u32 {
+    transcript
+        .messages
+        .iter()
+        .filter(|m| matches!(m, Message::User { text, .. } if !text.is_empty()))
+        .count() as u32
+}
+
 /// Maximum conversation turns stored per receipt.
 const MAX_CONVERSATION_TURNS: usize = 50;
 
@@ -416,6 +455,72 @@ pub fn extract_conversation_turns(
     }
 
     turns
+}
+
+/// Extract unique tool names used in the transcript.
+/// Returns sorted list of tool names like ["Bash", "Edit", "Grep", "Write"].
+pub fn extract_tools_used(transcript: &Transcript) -> Vec<String> {
+    let mut tools: Vec<String> = Vec::new();
+    for msg in &transcript.messages {
+        if let Message::ToolUse { name, .. } = msg {
+            // Exclude MCP tools (they're tracked separately) and Task tool (tracked as agents)
+            if !name.starts_with("mcp__") && name != "Task" && !tools.contains(name) {
+                tools.push(name.clone());
+            }
+        }
+    }
+    tools.sort();
+    tools
+}
+
+/// Extract MCP server names from tool calls matching the `mcp__<server>__<tool>` pattern.
+/// Returns sorted unique server names like ["filesystem", "github"].
+pub fn extract_mcp_servers(transcript: &Transcript) -> Vec<String> {
+    let mut servers: Vec<String> = Vec::new();
+    for msg in &transcript.messages {
+        if let Message::ToolUse { name, .. } = msg {
+            // MCP tools follow the pattern mcp__<server>__<tool>
+            if let Some(rest) = name.strip_prefix("mcp__") {
+                if let Some(server) = rest.split("__").next() {
+                    if !server.is_empty() && !servers.contains(&server.to_string()) {
+                        servers.push(server.to_string());
+                    }
+                }
+            }
+        }
+    }
+    servers.sort();
+    servers
+}
+
+/// Extract sub-agent descriptions from Task tool calls.
+/// Returns list of agent descriptions like ["Explore codebase", "Run tests"].
+pub fn extract_agents_spawned(transcript: &Transcript) -> Vec<String> {
+    let mut agents: Vec<String> = Vec::new();
+    for msg in &transcript.messages {
+        if let Message::ToolUse { name, input, .. } = msg {
+            if name == "Task" {
+                // Task tool has a "description" field and optionally "subagent_type"
+                let desc = input
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown agent");
+                let agent_type = input
+                    .get("subagent_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let label = if agent_type.is_empty() {
+                    desc.to_string()
+                } else {
+                    format!("{} ({})", desc, agent_type)
+                };
+                if !agents.contains(&label) {
+                    agents.push(label);
+                }
+            }
+        }
+    }
+    agents
 }
 
 pub fn full_conversation_text(transcript: &Transcript) -> String {

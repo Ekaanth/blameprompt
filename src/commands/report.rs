@@ -143,18 +143,9 @@ fn write_executive_summary(
     };
 
     let session_ids: HashSet<&str> = receipts.iter().map(|r| r.session_id.as_str()).collect();
-    let unique_files: HashSet<&str> = receipts.iter().map(|r| r.file_path.as_str()).collect();
+    let unique_files: HashSet<String> = receipts.iter().flat_map(|r| r.all_file_paths()).collect();
     let unique_users: HashSet<&str> = receipts.iter().map(|r| r.user.as_str()).collect();
-    let total_lines: u32 = receipts
-        .iter()
-        .map(|r| {
-            if r.line_range.1 >= r.line_range.0 {
-                r.line_range.1 - r.line_range.0 + 1
-            } else {
-                0
-            }
-        })
-        .sum();
+    let total_lines: u32 = receipts.iter().map(|r| r.total_lines_changed()).sum();
     let total_cost: f64 = receipts.iter().map(|r| r.cost_usd).sum();
 
     let providers: HashSet<&str> = receipts.iter().map(|r| r.provider.as_str()).collect();
@@ -189,6 +180,31 @@ fn write_executive_summary(
     writeln!(md, "| Unique contributors | {} |", unique_users.len()).ok();
     writeln!(md, "| AI tools used | {} |", tools.join(", ")).ok();
 
+    // Aggregate tools, MCPs, agents across all receipts
+    let mut all_tools: HashSet<&str> = HashSet::new();
+    let mut all_mcps: HashSet<&str> = HashSet::new();
+    let mut all_agents: Vec<&str> = Vec::new();
+    for r in receipts {
+        for t in &r.tools_used { all_tools.insert(t.as_str()); }
+        for m in &r.mcp_servers { all_mcps.insert(m.as_str()); }
+        for a in &r.agents_spawned {
+            if !all_agents.contains(&a.as_str()) { all_agents.push(a.as_str()); }
+        }
+    }
+    if !all_tools.is_empty() {
+        let mut tools_list: Vec<&str> = all_tools.into_iter().collect();
+        tools_list.sort();
+        writeln!(md, "| Tools used | {} |", tools_list.join(", ")).ok();
+    }
+    if !all_mcps.is_empty() {
+        let mut mcps_list: Vec<&str> = all_mcps.into_iter().collect();
+        mcps_list.sort();
+        writeln!(md, "| MCP servers | {} |", mcps_list.join(", ")).ok();
+    }
+    if !all_agents.is_empty() {
+        writeln!(md, "| Sub-agents spawned | {} |", all_agents.len()).ok();
+    }
+
     let uncommitted_count = entries
         .iter()
         .filter(|e| e.commit_sha == "uncommitted")
@@ -204,16 +220,7 @@ fn write_executive_summary(
 fn write_ai_vs_human(md: &mut String, receipts: &[&Receipt]) {
     writeln!(md, "## AI vs Human Code Attribution\n").ok();
 
-    let total_ai_lines: u32 = receipts
-        .iter()
-        .map(|r| {
-            if r.line_range.1 >= r.line_range.0 {
-                r.line_range.1 - r.line_range.0 + 1
-            } else {
-                0
-            }
-        })
-        .sum();
+    let total_ai_lines: u32 = receipts.iter().map(|r| r.total_lines_changed()).sum();
 
     writeln!(md, "### Overall").ok();
     writeln!(md, "- **AI-generated**: {} lines", total_ai_lines).ok();
@@ -222,17 +229,19 @@ fn write_ai_vs_human(md: &mut String, receipts: &[&Receipt]) {
     // By directory
     let mut by_dir: HashMap<String, u32> = HashMap::new();
     for r in receipts {
-        let rel = relative_path(&r.file_path);
-        let dir = std::path::Path::new(&rel)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| ".".to_string());
-        let lines = if r.line_range.1 >= r.line_range.0 {
-            r.line_range.1 - r.line_range.0 + 1
-        } else {
-            0
-        };
-        *by_dir.entry(dir).or_insert(0) += lines;
+        for fc in r.all_file_changes() {
+            let rel = relative_path(&fc.path);
+            let dir = std::path::Path::new(&rel)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| ".".to_string());
+            let lines = if fc.line_range.1 >= fc.line_range.0 {
+                fc.line_range.1 - fc.line_range.0 + 1
+            } else {
+                0
+            };
+            *by_dir.entry(dir).or_insert(0) += lines;
+        }
     }
 
     if !by_dir.is_empty() {
@@ -250,15 +259,17 @@ fn write_ai_vs_human(md: &mut String, receipts: &[&Receipt]) {
     // Top AI-heavy files
     let mut by_file: HashMap<String, (u32, String)> = HashMap::new();
     for r in receipts {
-        let lines = if r.line_range.1 >= r.line_range.0 {
-            r.line_range.1 - r.line_range.0 + 1
-        } else {
-            0
-        };
-        let entry = by_file
-            .entry(relative_path(&r.file_path))
-            .or_insert((0, r.model.clone()));
-        entry.0 += lines;
+        for fc in r.all_file_changes() {
+            let lines = if fc.line_range.1 >= fc.line_range.0 {
+                fc.line_range.1 - fc.line_range.0 + 1
+            } else {
+                0
+            };
+            let entry = by_file
+                .entry(relative_path(&fc.path))
+                .or_insert((0, r.model.clone()));
+            entry.0 += lines;
+        }
     }
 
     if !by_file.is_empty() {
@@ -343,11 +354,7 @@ fn write_user_contributions(md: &mut String, receipts: &[&Receipt]) {
 
     let mut by_user: HashMap<String, (u32, u32, f64)> = HashMap::new();
     for r in receipts {
-        let lines = if r.line_range.1 >= r.line_range.0 {
-            r.line_range.1 - r.line_range.0 + 1
-        } else {
-            0
-        };
+        let lines = r.total_lines_changed();
         let entry = by_user.entry(r.user.clone()).or_insert((0, 0, 0.0));
         entry.0 += 1; // sessions
         entry.1 += lines;
@@ -373,28 +380,57 @@ fn write_time_analysis(md: &mut String, receipts: &[&Receipt]) {
 
     let stats = session_stats::calculate(receipts);
 
-    let total_ai_lines: u32 = receipts
-        .iter()
-        .map(|r| {
-            if r.line_range.1 >= r.line_range.0 {
-                r.line_range.1 - r.line_range.0 + 1
-            } else {
-                0
-            }
-        })
-        .sum();
+    let total_ai_lines: u32 = receipts.iter().map(|r| r.total_lines_changed()).sum();
 
     let estimated_saved_hours = session_stats::estimate_dev_hours_saved(total_ai_lines);
+
+    // Use wall-clock time (merged intervals) when available, fall back to raw sum
+    let effective_duration = if stats.wall_clock_secs > 0 {
+        stats.wall_clock_secs
+    } else {
+        stats.total_duration_secs
+    };
 
     writeln!(md, "### Total Time Invested in AI").ok();
     writeln!(md, "| Metric | Value |").ok();
     writeln!(md, "|--------|-------|").ok();
+    if let Some(start) = stats.earliest_start {
+        writeln!(
+            md,
+            "| First session start | {} |",
+            start.format("%Y-%m-%d %H:%M:%S UTC")
+        )
+        .ok();
+    }
+    if let Some(end) = stats.latest_end {
+        writeln!(
+            md,
+            "| Last session end | {} |",
+            end.format("%Y-%m-%d %H:%M:%S UTC")
+        )
+        .ok();
+    }
     writeln!(
         md,
-        "| Total AI session time | {} |",
-        session_stats::format_duration(stats.total_duration_secs)
+        "| Wall-clock time (merged) | {} |",
+        session_stats::format_duration(effective_duration)
     )
     .ok();
+    if stats.wall_clock_secs > 0 && stats.total_duration_secs > stats.wall_clock_secs {
+        writeln!(
+            md,
+            "| Raw session time (before merge) | {} |",
+            session_stats::format_duration(stats.total_duration_secs)
+        )
+        .ok();
+        let saved = stats.total_duration_secs - stats.wall_clock_secs;
+        writeln!(
+            md,
+            "| Parallel agent overlap | {} (sub-agents ran concurrently) |",
+            session_stats::format_duration(saved)
+        )
+        .ok();
+    }
     writeln!(md, "| Unique sessions | {} |", stats.unique_sessions).ok();
     if stats.unique_sessions > 0 {
         writeln!(
@@ -411,8 +447,8 @@ fn write_time_analysis(md: &mut String, receipts: &[&Receipt]) {
         estimated_saved_hours, total_ai_lines
     )
     .ok();
-    if stats.total_duration_secs > 0 && estimated_saved_hours > 0.0 {
-        let roi = estimated_saved_hours / (stats.total_duration_secs as f64 / 3600.0);
+    if effective_duration > 0 && estimated_saved_hours > 0.0 {
+        let roi = estimated_saved_hours / (effective_duration as f64 / 3600.0);
         writeln!(md, "| Time ROI | {:.1}x |", roi).ok();
     }
     writeln!(md).ok();
@@ -574,21 +610,23 @@ fn write_file_heatmap(md: &mut String, receipts: &[&Receipt]) {
 
     let mut by_file: HashMap<String, (u32, u32, String, String)> = HashMap::new();
     for r in receipts {
-        let lines = if r.line_range.1 >= r.line_range.0 {
-            r.line_range.1 - r.line_range.0 + 1
-        } else {
-            0
-        };
-        let entry = by_file.entry(relative_path(&r.file_path)).or_insert((
-            0,
-            0,
-            String::new(),
-            String::new(),
-        ));
-        entry.0 += 1; // edits
-        entry.1 += lines;
-        entry.2 = r.timestamp.format("%Y-%m-%d").to_string(); // last edit
-        entry.3 = r.model.clone();
+        for fc in r.all_file_changes() {
+            let lines = if fc.line_range.1 >= fc.line_range.0 {
+                fc.line_range.1 - fc.line_range.0 + 1
+            } else {
+                0
+            };
+            let entry = by_file.entry(relative_path(&fc.path)).or_insert((
+                0,
+                0,
+                String::new(),
+                String::new(),
+            ));
+            entry.0 += 1; // edits
+            entry.1 += lines;
+            entry.2 = r.timestamp.format("%Y-%m-%d").to_string(); // last edit
+            entry.3 = r.model.clone();
+        }
     }
 
     writeln!(md, "### Most AI-Modified Files").ok();
@@ -635,7 +673,9 @@ fn write_session_analysis(md: &mut String, receipts: &[&Receipt]) {
             String::new(),
         ));
         entry.0 = entry.0.max(r.message_count);
-        entry.1.insert(relative_path(&r.file_path));
+        for f in r.all_file_paths() {
+            entry.1.insert(relative_path(&f));
+        }
         entry.2 += r.cost_usd;
         if entry.3.is_empty() {
             entry.3 = r.prompt_summary.chars().take(50).collect();
@@ -713,10 +753,12 @@ fn write_prompt_details(md: &mut String, entries: &[audit::AuditEntry]) {
         writeln!(md).ok();
 
         for r in &entry.receipts {
+            let file_changes = r.all_file_changes();
+            let files_display: Vec<String> = file_changes.iter().map(|fc| relative_path(&fc.path)).collect();
             writeln!(
                 md,
                 "#### {} | `{}` via {}\n",
-                relative_path(&r.file_path),
+                files_display.join(", "),
                 r.model,
                 r.provider
             )
@@ -726,16 +768,38 @@ fn write_prompt_details(md: &mut String, entries: &[audit::AuditEntry]) {
             writeln!(md, "| Session ID | `{}` |", r.session_id).ok();
             writeln!(md, "| Messages | {} |", r.message_count).ok();
             writeln!(md, "| Cost | ${:.4} |", r.cost_usd).ok();
-            writeln!(md, "| Lines | {}-{} |", r.line_range.0, r.line_range.1).ok();
+            writeln!(md, "| Files | {} |", file_changes.len()).ok();
+            writeln!(md, "| Total lines | {} |", r.total_lines_changed()).ok();
             writeln!(md, "| Prompt Hash | `{}` |", r.prompt_hash).ok();
+            if !r.tools_used.is_empty() {
+                writeln!(md, "| Tools | {} |", r.tools_used.join(", ")).ok();
+            }
+            if !r.mcp_servers.is_empty() {
+                writeln!(md, "| MCP Servers | {} |", r.mcp_servers.join(", ")).ok();
+            }
+            if !r.agents_spawned.is_empty() {
+                writeln!(md, "| Agents Spawned | {} |", r.agents_spawned.join("; ")).ok();
+            }
+            writeln!(md).ok();
+            for fc in &file_changes {
+                writeln!(md, "- `{}` (lines {}-{})", relative_path(&fc.path), fc.line_range.0, fc.line_range.1).ok();
+            }
             writeln!(md).ok();
 
             // Show the actual prompt summary
             writeln!(md, "**Prompt:**").ok();
             writeln!(md, "> {}\n", r.prompt_summary).ok();
 
-            // Only show session duration on first receipt per session
+            // Only show session timing on first receipt per session
             if sessions_shown.insert(r.session_id.clone()) {
+                if let Some(start) = r.session_start {
+                    writeln!(
+                        md,
+                        "- Session start: {}",
+                        start.format("%Y-%m-%d %H:%M:%S UTC")
+                    )
+                    .ok();
+                }
                 if let Some(duration) = r.session_duration_secs {
                     writeln!(
                         md,

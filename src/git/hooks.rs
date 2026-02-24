@@ -55,6 +55,10 @@ if [ -x "$BLAMEPROMPT" ]; then
     if [ ! -d "$BP_DIR" ]; then
         mkdir -p "$BP_DIR"
         echo '{{"receipts":[]}}' > "$BP_DIR/staging.json"
+        # Add .blameprompt/ to .gitignore if not already present
+        if [ ! -f .gitignore ] || ! grep -q '\.blameprompt' .gitignore 2>/dev/null; then
+            printf '\n# BlamePrompt staging (auto-generated)\n.blameprompt/\n' >> .gitignore
+        fi
     fi
     # Fetch remote BlamePrompt notes if they exist
     git fetch origin refs/notes/blameprompt:refs/notes/blameprompt 2>/dev/null || true

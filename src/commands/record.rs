@@ -1,5 +1,6 @@
 use crate::commands::staging;
 use crate::core::{config, pricing, receipt::Receipt, redact, transcript};
+use transcript::{extract_tools_used, extract_mcp_servers, extract_agents_spawned};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 
@@ -73,37 +74,48 @@ pub fn run(session_path: &str, provider: Option<&str>) {
     let user = get_git_user();
     let message_count = parsed.transcript.messages.len() as u32;
 
-    let mut receipt_count = 0;
-    for file_path in &parsed.files_modified {
-        let relative_path = make_relative(file_path, &cwd);
-        let receipt = Receipt {
-            id: Receipt::new_id(),
-            provider: provider.to_string(),
-            model: model.clone(),
-            session_id: parsed.session_id.clone(),
-            prompt_summary: prompt_summary.clone(),
-            prompt_hash: prompt_hash.clone(),
-            message_count,
-            cost_usd: cost,
-            timestamp: Utc::now(),
-            session_start: parsed.session_start,
-            session_end: parsed.session_end,
-            session_duration_secs: parsed.session_duration_secs,
-            ai_response_time_secs: parsed.avg_response_time_secs,
-            user: user.clone(),
-            file_path: relative_path,
+    // Build files_changed list
+    let files_changed: Vec<crate::core::receipt::FileChange> = parsed
+        .files_modified
+        .iter()
+        .map(|f| crate::core::receipt::FileChange {
+            path: make_relative(f, &cwd),
             line_range: (1, 1), // Unknown without diff context
-            parent_receipt_id: None,
-            conversation: if conversation_turns.is_empty() {
-                None
-            } else {
-                Some(conversation_turns.clone())
-            },
-        };
+        })
+        .collect();
 
-        staging::add_receipt(&receipt);
-        receipt_count += 1;
-    }
+    let receipt = Receipt {
+        id: Receipt::new_id(),
+        provider: provider.to_string(),
+        model: model.clone(),
+        session_id: parsed.session_id.clone(),
+        prompt_summary: prompt_summary.clone(),
+        prompt_hash: prompt_hash.clone(),
+        message_count,
+        cost_usd: cost,
+        timestamp: Utc::now(),
+        session_start: parsed.session_start,
+        session_end: parsed.session_end,
+        session_duration_secs: parsed.session_duration_secs,
+        ai_response_time_secs: parsed.avg_response_time_secs,
+        user: user.clone(),
+        file_path: files_changed.first().map(|f| f.path.clone()).unwrap_or_default(),
+        line_range: (0, 0),
+        files_changed,
+        parent_receipt_id: None,
+        prompt_number: None,
+        tools_used: extract_tools_used(&parsed.transcript),
+        mcp_servers: extract_mcp_servers(&parsed.transcript),
+        agents_spawned: extract_agents_spawned(&parsed.transcript),
+        conversation: if conversation_turns.is_empty() {
+            None
+        } else {
+            Some(conversation_turns.clone())
+        },
+    };
+
+    staging::upsert_receipt(&receipt);
+    let receipt_count = 1;
 
     println!(
         "[BlamePrompt] Recorded {} receipt(s) from session {}",

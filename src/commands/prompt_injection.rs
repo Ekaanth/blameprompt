@@ -120,7 +120,8 @@ pub fn run(output: &str) {
 
     // Scan AI-generated code for injection patterns
     for r in &all_receipts {
-        let file_path = &r.file_path;
+      for fc in r.all_file_changes() {
+        let file_path = &fc.path;
         let content = match std::fs::read_to_string(file_path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -129,8 +130,8 @@ pub fn run(output: &str) {
         files_scanned += 1;
         let lines: Vec<&str> = content.lines().collect();
 
-        let start = r.line_range.0.saturating_sub(1) as usize;
-        let end = (r.line_range.1 as usize).min(lines.len());
+        let start = fc.line_range.0.saturating_sub(1) as usize;
+        let end = (fc.line_range.1 as usize).min(lines.len());
 
         if start >= lines.len() {
             continue;
@@ -157,6 +158,7 @@ pub fn run(output: &str) {
                 }
             }
         }
+      }
     }
 
     // Also scan conversation turns for suspicious AI instructions

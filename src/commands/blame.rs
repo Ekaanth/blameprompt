@@ -89,15 +89,17 @@ pub fn calculate_code_origin(file: &str) -> Option<CodeOriginStats> {
     for line_num in 1..=line_count {
         if let Some(sha) = line_commits.get(&line_num) {
             if let Some(receipts) = sha_receipts.get(sha) {
-                for r in receipts {
-                    if (r.file_path == file
-                        || file.ends_with(&r.file_path)
-                        || r.file_path.ends_with(file))
-                        && line_num >= r.line_range.0
-                        && line_num <= r.line_range.1
-                    {
-                        ai_lines += 1;
-                        break;
+                'line: for r in receipts {
+                    for fc in r.all_file_changes() {
+                        if (fc.path == file
+                            || file.ends_with(&fc.path)
+                            || fc.path.ends_with(file))
+                            && line_num >= fc.line_range.0
+                            && line_num <= fc.line_range.1
+                        {
+                            ai_lines += 1;
+                            break 'line;
+                        }
                     }
                 }
             }
@@ -239,20 +241,22 @@ fn compute_blame(file: &str) -> Option<(Vec<String>, HashMap<u32, String>, Vec<L
             // Fall back to receipt-level matching
             if source == "human" {
                 if let Some(receipts) = sha_receipts.get(sha) {
-                    for r in receipts {
-                        if (r.file_path == file
-                            || file.ends_with(&r.file_path)
-                            || r.file_path.ends_with(file))
-                            && line_num >= r.line_range.0
-                            && line_num <= r.line_range.1
-                        {
-                            source = "ai".to_string();
-                            provider = r.provider.clone();
-                            model = r.model.clone();
-                            cost_usd = r.cost_usd;
-                            prompt_summary = r.prompt_summary.clone();
-                            receipt_id = r.id.clone();
-                            break;
+                    'receipt: for r in receipts {
+                        for fc in r.all_file_changes() {
+                            if (fc.path == file
+                                || file.ends_with(&fc.path)
+                                || fc.path.ends_with(file))
+                                && line_num >= fc.line_range.0
+                                && line_num <= fc.line_range.1
+                            {
+                                source = "ai".to_string();
+                                provider = r.provider.clone();
+                                model = r.model.clone();
+                                cost_usd = r.cost_usd;
+                                prompt_summary = r.prompt_summary.clone();
+                                receipt_id = r.id.clone();
+                                break 'receipt;
+                            }
                         }
                     }
                 }

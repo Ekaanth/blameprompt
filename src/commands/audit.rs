@@ -70,13 +70,7 @@ pub fn collect_audit_entries(
             let total_ai_lines: u32 = payload
                 .receipts
                 .iter()
-                .map(|r| {
-                    if r.line_range.1 >= r.line_range.0 {
-                        r.line_range.1 - r.line_range.0 + 1
-                    } else {
-                        0
-                    }
-                })
+                .map(|r| r.total_lines_changed())
                 .sum();
             let total_cost_usd: f64 = payload.receipts.iter().map(|r| r.cost_usd).sum();
 
@@ -105,13 +99,7 @@ pub fn collect_staged_entries() -> Vec<AuditEntry> {
     let total_ai_lines: u32 = staging
         .receipts
         .iter()
-        .map(|r| {
-            if r.line_range.1 >= r.line_range.0 {
-                r.line_range.1 - r.line_range.0 + 1
-            } else {
-                0
-            }
-        })
+        .map(|r| r.total_lines_changed())
         .sum();
     let total_cost_usd: f64 = staging.receipts.iter().map(|r| r.cost_usd).sum();
 
@@ -165,7 +153,6 @@ pub fn relative_path(path: &str) -> String {
 }
 
 fn write_receipt_md(md: &mut String, r: &Receipt) {
-    let rel_file = relative_path(&r.file_path);
     md.push_str(&format!("#### Receipt: {}\n", r.id));
     md.push_str("| Field | Value |\n");
     md.push_str("|-------|-------|\n");
@@ -174,11 +161,28 @@ fn write_receipt_md(md: &mut String, r: &Receipt) {
     md.push_str(&format!("| Session | {} |\n", r.session_id));
     md.push_str(&format!("| Messages | {} |\n", r.message_count));
     md.push_str(&format!("| Cost | ${:.4} |\n", r.cost_usd));
-    md.push_str(&format!("| File | {} |\n", rel_file));
-    md.push_str(&format!(
-        "| Lines | {}-{} |\n\n",
-        r.line_range.0, r.line_range.1
-    ));
+    let file_changes = r.all_file_changes();
+    md.push_str(&format!("| Files changed | {} |\n", file_changes.len()));
+    md.push_str(&format!("| Total lines | {} |\n", r.total_lines_changed()));
+    if !r.tools_used.is_empty() {
+        md.push_str(&format!("| Tools | {} |\n", r.tools_used.join(", ")));
+    }
+    if !r.mcp_servers.is_empty() {
+        md.push_str(&format!("| MCP Servers | {} |\n", r.mcp_servers.join(", ")));
+    }
+    if !r.agents_spawned.is_empty() {
+        md.push_str(&format!("| Agents Spawned | {} |\n", r.agents_spawned.join("; ")));
+    }
+    md.push('\n');
+    for fc in &file_changes {
+        md.push_str(&format!(
+            "- `{}` (lines {}-{})\n",
+            relative_path(&fc.path),
+            fc.line_range.0,
+            fc.line_range.1
+        ));
+    }
+    md.push('\n');
     md.push_str("**Prompt Summary:**\n");
     md.push_str(&format!("> {}\n\n", r.prompt_summary));
     md.push_str(&format!("**Prompt Hash:** `{}`\n\n", r.prompt_hash));
@@ -317,7 +321,7 @@ pub fn run(
             );
         }
         "csv" => {
-            println!("commit_sha,date,author,message,provider,model,session_id,message_count,cost_usd,file,line_range,prompt_summary,prompt_hash");
+            println!("commit_sha,date,author,message,provider,model,session_id,message_count,cost_usd,files,total_lines,prompt_summary,prompt_hash");
             for entry in &entries {
                 for r in &entry.receipts {
                     let sha_display = if entry.commit_sha.len() >= 8 {
@@ -325,8 +329,9 @@ pub fn run(
                     } else {
                         &entry.commit_sha
                     };
+                    let files_str: Vec<String> = r.all_file_paths().iter().map(|f| relative_path(f)).collect();
                     println!(
-                        "{},{},{},{},{},{},{},{},{:.4},{},{}-{},{},{}",
+                        "{},{},{},{},{},{},{},{},{:.4},{},{},{},{}",
                         sha_display,
                         entry.commit_date,
                         entry.commit_author,
@@ -336,9 +341,8 @@ pub fn run(
                         r.session_id,
                         r.message_count,
                         r.cost_usd,
-                        relative_path(&r.file_path),
-                        r.line_range.0,
-                        r.line_range.1,
+                        files_str.join(";"),
+                        r.total_lines_changed(),
                         r.prompt_summary.replace(',', ";"),
                         r.prompt_hash,
                     );
@@ -376,7 +380,7 @@ pub fn run(
                 "Model",
                 "Messages",
                 "Cost",
-                "File",
+                "Files",
                 "Lines",
                 "Prompt Summary",
             ]);
@@ -393,7 +397,12 @@ pub fn run(
                     } else {
                         &entry.commit_date
                     };
-                    let rel_file = relative_path(&r.file_path);
+                    let file_count = r.all_file_changes().len();
+                    let files_display = if file_count == 1 {
+                        relative_path(&r.all_file_changes()[0].path)
+                    } else {
+                        format!("{} files", file_count)
+                    };
                     table.add_row(vec![
                         sha_display,
                         date_display,
@@ -402,8 +411,8 @@ pub fn run(
                         &r.model,
                         &r.message_count.to_string(),
                         &format!("${:.4}", r.cost_usd),
-                        &rel_file,
-                        &format!("{}-{}", r.line_range.0, r.line_range.1),
+                        &files_display,
+                        &r.total_lines_changed().to_string(),
                         &truncate_str(&r.prompt_summary, 40),
                     ]);
                 }

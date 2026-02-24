@@ -94,7 +94,12 @@ pub fn run(commit: &str, format: &str) {
         let ts = r.timestamp.format("%Y-%m-%d %H:%M").to_string();
         let prompt: String = r.prompt_summary.chars().take(40).collect();
 
-        let rel_file = audit::relative_path(&r.file_path);
+        let file_changes = r.all_file_changes();
+        let files_display = if file_changes.len() == 1 {
+            audit::relative_path(&file_changes[0].path)
+        } else {
+            format!("{} files", file_changes.len())
+        };
         table.add_row(vec![
             id_short,
             &r.provider,
@@ -102,8 +107,8 @@ pub fn run(commit: &str, format: &str) {
             session_short,
             &r.message_count.to_string(),
             &format!("${:.4}", r.cost_usd),
-            &rel_file,
-            &format!("{}-{}", r.line_range.0, r.line_range.1),
+            &files_display,
+            &r.total_lines_changed().to_string(),
             &ts,
             &prompt,
         ]);
@@ -167,10 +172,11 @@ pub fn run(commit: &str, format: &str) {
     for r in &payload.receipts {
         if let Some(ref turns) = r.conversation {
             let id_short = if r.id.len() >= 8 { &r.id[..8] } else { &r.id };
+            let files_display: Vec<String> = r.all_file_paths().iter().map(|f| audit::relative_path(f)).collect();
             println!(
                 "\nChain of Thought for receipt {} ({}):",
                 id_short,
-                audit::relative_path(&r.file_path)
+                files_display.join(", ")
             );
             println!("{}", "-".repeat(60));
             for t in turns {

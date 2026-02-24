@@ -39,6 +39,14 @@ pub fn auto_setup() {
     }
 
     mark_setup_done();
+
+    // Also initialize the current repo if we're inside one
+    if let Ok(cwd) = std::env::current_dir() {
+        if git2::Repository::discover(&cwd).is_ok() {
+            let _ = auto_init_blameprompt(cwd.to_str().unwrap_or("."));
+        }
+    }
+
     print_install_banner(true);
 }
 
@@ -208,6 +216,14 @@ pub fn run_init(global: bool) -> Result<(), String> {
         install_git_template()?;
         claude_hooks::install()?;
         mark_setup_done();
+
+        // Also initialize the current repo if we're inside one
+        if let Ok(cwd) = std::env::current_dir() {
+            if git2::Repository::discover(&cwd).is_ok() {
+                let _ = auto_init_blameprompt(cwd.to_str().unwrap_or("."));
+            }
+        }
+
         print_install_banner(false);
     } else {
         let cwd = std::env::current_dir().map_err(|e| format!("Cannot get cwd: {}", e))?;

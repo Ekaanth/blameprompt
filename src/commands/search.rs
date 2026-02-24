@@ -11,6 +11,7 @@ pub struct SearchResult {
     pub model: String,
     pub file_path: String,
     pub line_range: (u32, u32),
+    pub files_changed: Vec<crate::core::receipt::FileChange>,
     pub cost_usd: f64,
     pub prompt_summary: String,
     pub timestamp: String,
@@ -48,8 +49,9 @@ pub fn run(query: &str, limit: usize, format: &str) {
     for sha in &commits {
         if let Some(payload) = notes::read_receipts_for_commit(sha) {
             for r in &payload.receipts {
+                let file_match = r.all_file_paths().iter().any(|f| f.to_lowercase().contains(&query_lower));
                 if r.prompt_summary.to_lowercase().contains(&query_lower)
-                    || r.file_path.to_lowercase().contains(&query_lower)
+                    || file_match
                     || r.model.to_lowercase().contains(&query_lower)
                     || r.provider.to_lowercase().contains(&query_lower)
                 {
@@ -89,8 +91,9 @@ pub fn run(query: &str, limit: usize, format: &str) {
                     receipt_id: r.id.clone(),
                     provider: r.provider.clone(),
                     model: r.model.clone(),
-                    file_path: audit::relative_path(&r.file_path),
-                    line_range: r.line_range,
+                    file_path: r.all_file_paths().first().map(|f| audit::relative_path(f)).unwrap_or_default(),
+                    line_range: r.all_file_changes().first().map(|fc| fc.line_range).unwrap_or((0, 0)),
+                    files_changed: r.all_file_changes(),
                     cost_usd: r.cost_usd,
                     prompt_summary: r.prompt_summary.clone(),
                     timestamp: r.timestamp.to_rfc3339(),
@@ -127,14 +130,19 @@ pub fn run(query: &str, limit: usize, format: &str) {
     for (sha, r) in &matches {
         let sha_short = if sha.len() >= 8 { &sha[..8] } else { sha };
         let prompt: String = r.prompt_summary.chars().take(50).collect();
-        let rel_file = audit::relative_path(&r.file_path);
+        let file_changes = r.all_file_changes();
+        let files_display = if file_changes.len() == 1 {
+            audit::relative_path(&file_changes[0].path)
+        } else {
+            format!("{} files", file_changes.len())
+        };
 
         table.add_row(vec![
             sha_short,
             &r.provider,
             &r.model,
-            &rel_file,
-            &format!("{}-{}", r.line_range.0, r.line_range.1),
+            &files_display,
+            &r.total_lines_changed().to_string(),
             &format!("${:.4}", r.cost_usd),
             &prompt,
         ]);

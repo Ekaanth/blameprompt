@@ -63,24 +63,20 @@ pub fn generate_report(from: Option<&str>, to: Option<&str>) -> Result<Analytics
         for r in &entry.receipts {
             total_receipts += 1;
             total_cost += r.cost_usd;
-            let lines = if r.line_range.1 >= r.line_range.0 {
-                r.line_range.1 - r.line_range.0 + 1
-            } else {
-                0
-            };
+            let lines = r.total_lines_changed();
             total_lines += lines;
             session_ids.insert(r.session_id.clone());
 
             // By provider
             let ps = by_provider.entry(r.provider.clone()).or_default();
             ps.sessions += 1;
-            ps.files_modified += 1;
+            ps.files_modified += r.all_file_changes().len() as u32;
             ps.total_cost += r.cost_usd;
 
             // By model
             let ms = by_model.entry(r.model.clone()).or_default();
             ms.sessions += 1;
-            ms.files_modified += 1;
+            ms.files_modified += r.all_file_changes().len() as u32;
             ms.total_cost += r.cost_usd;
 
             // By user
@@ -219,7 +215,7 @@ pub fn run(export_format: Option<&str>) {
                 if let Ok(entries) = audit::collect_audit_entries(None, None, None) {
                     entries
                         .iter()
-                        .flat_map(|e| e.receipts.iter().map(|r| r.file_path.clone()))
+                        .flat_map(|e| e.receipts.iter().flat_map(|r| r.all_file_paths()))
                         .collect()
                 } else {
                     std::collections::HashSet::new()

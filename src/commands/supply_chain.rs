@@ -110,8 +110,10 @@ fn calculate_risk_factors(entries: &[audit::AuditEntry]) -> Vec<RiskFactor> {
     let sensitive_files: Vec<_> = all_receipts
         .iter()
         .filter(|r| {
-            let lower = r.file_path.to_lowercase();
-            sensitive_patterns.iter().any(|p| lower.contains(p))
+            r.all_file_paths().iter().any(|f| {
+                let lower = f.to_lowercase();
+                sensitive_patterns.iter().any(|p| lower.contains(p))
+            })
         })
         .collect();
     let sensitive_pct = sensitive_files.len() as f64 / all_receipts.len() as f64;
@@ -282,27 +284,31 @@ pub fn run(output: &str) {
         "auth", "crypto", "security", "secret", "password", "key", "token", "payment", "billing",
         "admin", "config", "env", ".pem", ".key",
     ];
-    let sensitive_files: Vec<_> = all_receipts
+    let sensitive_receipts: Vec<_> = all_receipts
         .iter()
         .filter(|r| {
-            let lower = r.file_path.to_lowercase();
-            sensitive_patterns.iter().any(|p| lower.contains(p))
+            r.all_file_paths().iter().any(|f| {
+                let lower = f.to_lowercase();
+                sensitive_patterns.iter().any(|p| lower.contains(p))
+            })
         })
         .collect();
-    if !sensitive_files.is_empty() {
+    if !sensitive_receipts.is_empty() {
         md.push_str("## High-Risk AI-Modified Files\n\n");
         md.push_str("These security-sensitive files were generated or modified by AI:\n\n");
         md.push_str("| File | Model | Provider | Lines |\n");
         md.push_str("|------|-------|----------|-------|\n");
-        for r in &sensitive_files {
-            md.push_str(&format!(
-                "| {} | {} | {} | {}-{} |\n",
-                relative_path(&r.file_path),
-                r.model,
-                r.provider,
-                r.line_range.0,
-                r.line_range.1
-            ));
+        for r in &sensitive_receipts {
+            for fc in r.all_file_changes() {
+                md.push_str(&format!(
+                    "| {} | {} | {} | {}-{} |\n",
+                    relative_path(&fc.path),
+                    r.model,
+                    r.provider,
+                    fc.line_range.0,
+                    fc.line_range.1
+                ));
+            }
         }
         md.push('\n');
     }

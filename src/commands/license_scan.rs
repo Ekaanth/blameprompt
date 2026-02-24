@@ -100,10 +100,12 @@ pub fn run(output: &str) {
     let mut models_seen: HashMap<String, Vec<String>> = HashMap::new();
 
     for r in &all_receipts {
-        models_seen
-            .entry(r.model.clone())
-            .or_default()
-            .push(relative_path(&r.file_path));
+        for f in r.all_file_paths() {
+            models_seen
+                .entry(r.model.clone())
+                .or_default()
+                .push(relative_path(&f));
+        }
     }
 
     let mut flagged_count = 0;
