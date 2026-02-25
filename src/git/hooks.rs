@@ -91,8 +91,11 @@ fn post_rewrite_hook(binary: &str) -> String {
     format!(
         r#"# BlamePrompt post-rewrite hook (do not edit between markers)
 {preamble}BLAMEPROMPT="{binary}"
-# Remap BlamePrompt notes after rebase or amend
+# Remap BlamePrompt notes after rebase or amend, adjusting line offsets
 if [ -x "$BLAMEPROMPT" ]; then
+    "$BLAMEPROMPT" rebase-notes
+else
+    # Fallback: plain copy without line-offset adjustment
     while read OLD_SHA NEW_SHA; do
         NOTE=$(git notes --ref refs/notes/blameprompt show "$OLD_SHA" 2>/dev/null) || continue
         git notes --ref refs/notes/blameprompt add -f -m "$NOTE" "$NEW_SHA" 2>/dev/null && \

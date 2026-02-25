@@ -1,4 +1,5 @@
 use crate::commands::audit;
+use crate::core::util;
 use crate::git::notes;
 use comfy_table::Table;
 
@@ -30,12 +31,12 @@ pub fn run(commit: &str, format: &str) {
             if format == "json" {
                 println!(
                     "{{\"error\":\"no_receipts\",\"commit\":\"{}\"}}",
-                    &sha[..8.min(sha.len())]
+                    util::short_sha(&sha)
                 );
             } else {
                 println!(
                     "No BlamePrompt receipts found for commit {}",
-                    &sha[..8.min(sha.len())]
+                    util::short_sha(&sha)
                 );
             }
             return;
@@ -64,7 +65,7 @@ pub fn run(commit: &str, format: &str) {
     }
 
     // Table output (default)
-    let sha_short = &sha[..8.min(sha.len())];
+    let sha_short = util::short_sha(&sha);
     println!("BlamePrompt receipts for commit {}", sha_short);
     println!("Schema version: {}", payload.blameprompt_version);
     println!("Total receipts: {}", payload.receipts.len());
@@ -123,7 +124,7 @@ pub fn run(commit: &str, format: &str) {
             println!(
                 "  {} (blob: {})",
                 audit::relative_path(&fm.path),
-                &fm.blob_hash[..8.min(fm.blob_hash.len())]
+                util::short_sha(&fm.blob_hash)
             );
             for h in &fm.hunks {
                 println!(

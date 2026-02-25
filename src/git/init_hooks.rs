@@ -1,4 +1,4 @@
-use crate::{git::hooks, integrations::claude_hooks};
+use crate::{git::hooks, git::wrap, integrations::claude_hooks};
 use std::path::Path;
 
 /// Marker file to track that global setup has been done.
@@ -37,6 +37,9 @@ pub fn auto_setup() {
     if install_git_template().is_err() {
         return;
     }
+
+    // Install transparent git wrapper (optional; failure is non-fatal)
+    let _ = wrap::install();
 
     mark_setup_done();
 
@@ -88,14 +91,18 @@ fn print_install_banner(use_stderr: bool) {
         format!("         {d}→ {home}/.claude/settings.json{r}"),
         format!("  {bg}[done]{r} Git template configured (7 git hooks)"),
         format!("         {d}→ {home}/.blameprompt/git-template{r}"),
+        format!("  {bg}[done]{r} Transparent git wrapper installed"),
+        format!("         {d}→ {home}/.blameprompt/bin/git{r}"),
         format!("  {bg}[done]{r} All future repos will auto-track AI prompts"),
         String::new(),
         format!("{bw}BlamePrompt installed.{r}"),
         format!("  Global hooks configured"),
         format!("  Git template ready"),
+        format!("  Transparent git wrapper active"),
         String::new(),
         format!("{b}Get started:{r}"),
         format!("  {c}blameprompt blame{r} {d}<file>{r}       {d}Line-by-line AI vs human attribution{r}"),
+        format!("  {c}blameprompt diff{r}  {d}[commit]{r}     {d}Annotated diff with AI/human markers{r}"),
         format!("  {c}blameprompt show{r}  {d}<commit>{r}     {d}View receipts attached to a commit{r}"),
         format!("  {c}blameprompt audit{r}              {d}Full audit trail{r}"),
         format!("  {c}blameprompt analytics{r}          {d}AI usage stats & cost breakdown{r}"),
@@ -215,6 +222,8 @@ pub fn run_init(global: bool) -> Result<(), String> {
     if global {
         install_git_template()?;
         claude_hooks::install()?;
+        // Install transparent git wrapper (optional; failure is non-fatal)
+        let _ = wrap::install();
         mark_setup_done();
 
         // Also initialize the current repo if we're inside one
@@ -256,6 +265,7 @@ pub fn run_init(global: bool) -> Result<(), String> {
         println!();
         println!("{b}Get started:{r}");
         println!("  {c}blameprompt blame{r} {d}<file>{r}       {d}Line-by-line AI vs human attribution{r}");
+        println!("  {c}blameprompt diff{r}  {d}[commit]{r}     {d}Annotated diff with AI/human markers{r}");
         println!(
             "  {c}blameprompt show{r}  {d}<commit>{r}     {d}View receipts attached to a commit{r}"
         );

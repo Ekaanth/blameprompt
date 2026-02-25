@@ -135,6 +135,9 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
         } else {
             existing.total_deletions
         };
+        // Preserve accepted/overridden lines (computed at attach time; never overwrite once set).
+        let keep_accepted_lines = existing.accepted_lines.or(receipt.accepted_lines);
+        let keep_overridden_lines = existing.overridden_lines.or(receipt.overridden_lines);
 
         // Update the receipt in place
         *existing = receipt.clone();
@@ -152,6 +155,8 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
         existing.prompt_duration_secs = keep_prompt_duration_secs;
         existing.total_additions = keep_total_additions;
         existing.total_deletions = keep_total_deletions;
+        existing.accepted_lines = keep_accepted_lines;
+        existing.overridden_lines = keep_overridden_lines;
 
         // Keep legacy fields pointing at first file
         if let Some(first) = existing.files_changed.first() {
@@ -247,6 +252,8 @@ mod tests {
             conversation: None,
             prompt_submitted_at: None,
             prompt_duration_secs: None,
+            accepted_lines: None,
+            overridden_lines: None,
         }
     }
 

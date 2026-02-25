@@ -124,6 +124,18 @@ enum Commands {
         include_uncommitted: bool,
     },
 
+    /// Show annotated diff with AI/human attribution
+    Diff {
+        /// Commit reference to annotate (default: working tree diff)
+        commit: Option<String>,
+    },
+
+    /// Install transparent git wrapper (auto-attaches receipts on every commit)
+    InstallGitWrap,
+
+    /// Remap BlamePrompt notes after rebase/amend (called by post-rewrite hook, internal)
+    RebaseNotes,
+
     /// Push BlamePrompt notes to origin
     Push,
 
@@ -142,6 +154,16 @@ enum Commands {
         /// Path to the JSONL session transcript
         #[arg(long)]
         session: String,
+        /// AI provider name (claude, cursor, copilot, openai …)
+        #[arg(long)]
+        provider: Option<String>,
+    },
+
+    /// Import recent AI chat sessions from Cursor IDE
+    RecordCursor {
+        /// Path to a specific Cursor workspace storage directory or state.vscdb
+        #[arg(long)]
+        workspace: Option<String>,
     },
 
     /// Manage the local SQLite cache
@@ -190,12 +212,121 @@ enum Commands {
 
     /// Attach staged receipts to HEAD as git notes and clear staging (used by git hooks, internal)
     Attach,
+
+    /// Export blameprompt notes for a commit to Agent Trace v0.1.0 format
+    ExportAgentTrace {
+        /// Commit reference (default: HEAD)
+        commit: Option<String>,
+    },
+
+    /// Display Agent Trace v0.1.0 record for a commit
+    ImportAgentTrace {
+        /// Commit reference (default: HEAD)
+        commit: Option<String>,
+    },
+
+    /// Post AI attribution summary as a GitHub PR comment
+    GithubComment {
+        /// PR number to comment on (auto-detected from current branch if omitted)
+        #[arg(long)]
+        pr: Option<u32>,
+        /// Repository slug (owner/repo, auto-detected from remote if omitted)
+        #[arg(long)]
+        repo: Option<String>,
+    },
+
+    /// Show line-by-line AI provenance for a file
+    CheckProvenance {
+        /// File to check
+        file: String,
+        /// Show provenance for a specific line number
+        #[arg(long)]
+        line: Option<u32>,
+    },
 }
 
 #[derive(Subcommand)]
 enum CacheAction {
     /// Sync Git Notes into the local SQLite cache for fast queries
     Sync,
+}
+
+/// Get the blob SHA stored in HEAD for a given file path.
+fn get_head_blob(file_path: &str) -> Option<String> {
+    let spec = format!("HEAD:{}", file_path);
+    std::process::Command::new("git")
+        .args(["rev-parse", &spec])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Retrieve lines from a git blob by SHA.
+fn get_blob_lines(blob_sha: &str) -> Vec<String> {
+    std::process::Command::new("git")
+        .args(["cat-file", "-p", blob_sha])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.lines().map(String::from).collect())
+        .unwrap_or_default()
+}
+
+/// Count how many lines from `staging_blob` are present in `head_blob` (accepted)
+/// vs absent (overridden by human edits).
+fn count_accepted_overridden(staging_blob: &str, head_blob: &str) -> (u32, u32) {
+    let staging_lines = get_blob_lines(staging_blob);
+    let head_lines = get_blob_lines(head_blob);
+
+    let head_set: std::collections::HashSet<&str> =
+        head_lines.iter().map(|s| s.as_str()).collect();
+
+    let mut accepted = 0u32;
+    let mut overridden = 0u32;
+    for line in &staging_lines {
+        if head_set.contains(line.as_str()) {
+            accepted += 1;
+        } else {
+            overridden += 1;
+        }
+    }
+    (accepted, overridden)
+}
+
+/// Enrich receipts with `accepted_lines` / `overridden_lines` by comparing the
+/// blob hashes captured at PostToolUse time against the blobs actually committed to HEAD.
+fn compute_acceptance_stats(receipts: &mut [core::receipt::Receipt]) {
+    for receipt in receipts.iter_mut() {
+        let mut total_accepted = 0u32;
+        let mut total_overridden = 0u32;
+        let mut has_data = false;
+
+        for fc in &receipt.files_changed {
+            if let Some(ref staging_blob) = fc.blob_hash {
+                if let Some(head_blob) = get_head_blob(&fc.path) {
+                    has_data = true;
+                    if head_blob == *staging_blob {
+                        // File unchanged between AI write and commit — all additions accepted
+                        total_accepted += fc.additions;
+                    } else {
+                        let (accepted, overridden) =
+                            count_accepted_overridden(staging_blob, &head_blob);
+                        total_accepted += accepted;
+                        total_overridden += overridden;
+                    }
+                }
+            }
+        }
+
+        if has_data {
+            receipt.accepted_lines = Some(total_accepted);
+            receipt.overridden_lines = Some(total_overridden);
+        }
+    }
 }
 
 fn main() {
@@ -302,6 +433,51 @@ fn main() {
             }
         }
 
+        Commands::Diff { commit } => {
+            commands::diff::run(commit.as_deref());
+        }
+
+        Commands::InstallGitWrap => {
+            match git::wrap::install() {
+                Ok(path) => {
+                    let home = dirs::home_dir()
+                        .map(|h| h.display().to_string())
+                        .unwrap_or_else(|| "~".to_string());
+                    println!();
+                    println!(
+                        "  \x1b[1;32m[done]\x1b[0m Git wrapper installed"
+                    );
+                    println!(
+                        "         \x1b[2m→ {}\x1b[0m",
+                        path.display()
+                    );
+                    println!(
+                        "  \x1b[1;32m[done]\x1b[0m PATH export added to shell RC"
+                    );
+                    println!(
+                        "         \x1b[2m→ {}/.blameprompt/bin:$PATH\x1b[0m",
+                        home
+                    );
+                    println!();
+                    println!(
+                        "\x1b[1mReload your shell to activate:\x1b[0m  \x1b[36msource ~/.zshrc\x1b[0m"
+                    );
+                    println!(
+                        "Every \x1b[36mgit commit\x1b[0m will now auto-attach AI receipts."
+                    );
+                    println!();
+                }
+                Err(e) => {
+                    eprintln!("Error installing git wrapper: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Commands::RebaseNotes => {
+            commands::rebase_notes::run_from_stdin();
+        }
+
         Commands::Push => {
             commands::sync::push();
         }
@@ -314,8 +490,12 @@ fn main() {
             commands::redact_test::run(&test);
         }
 
-        Commands::Record { session } => {
-            commands::record::run(&session, None);
+        Commands::Record { session, provider } => {
+            commands::record::run(&session, provider.as_deref());
+        }
+
+        Commands::RecordCursor { workspace } => {
+            integrations::cursor::run_record_cursor(workspace.as_deref());
         }
 
         Commands::Cache { action } => match action {
@@ -352,11 +532,29 @@ fn main() {
             println!("{}", data.receipts.len());
         }
 
+        Commands::ExportAgentTrace { commit } => {
+            integrations::agent_trace::run_export(commit.as_deref());
+        }
+
+        Commands::ImportAgentTrace { commit } => {
+            integrations::agent_trace::run_import(commit.as_deref());
+        }
+
+        Commands::GithubComment { pr, repo } => {
+            commands::github::run(pr, repo.as_deref());
+        }
+
+        Commands::CheckProvenance { file, line } => {
+            commands::check_provenance::run(&file, line);
+        }
+
         Commands::Attach => {
-            let data = commands::staging::read_staging();
+            let mut data = commands::staging::read_staging();
             if data.receipts.is_empty() {
                 return;
             }
+            // Compute accepted/overridden lines by comparing AI-written blobs against HEAD
+            compute_acceptance_stats(&mut data.receipts);
             match git::notes::attach_receipts_to_head(&data) {
                 Ok(()) => {
                     commands::staging::clear_staging();

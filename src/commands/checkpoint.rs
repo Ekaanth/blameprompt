@@ -2,7 +2,7 @@ use crate::commands::staging;
 use crate::core::{
     config, pricing,
     receipt::{FileChange, Receipt},
-    redact, transcript,
+    redact, transcript, util,
 };
 use chrono::Utc;
 use sha2::{Digest, Sha256};
@@ -73,56 +73,6 @@ fn parse_hook_input(json_str: &str) -> HookInput {
     }
 }
 
-/// Convert an absolute path to a path relative to `base`.
-/// If the path is already relative or doesn't start with base, return as-is.
-fn make_relative(path: &str, base: &str) -> String {
-    let path = path.trim();
-    let base = base.trim_end_matches('/');
-    if base.is_empty() || base == "." {
-        return path.to_string();
-    }
-    if let Some(rel) = path.strip_prefix(base) {
-        let rel = rel.strip_prefix('/').unwrap_or(rel);
-        if rel.is_empty() {
-            return path.to_string();
-        }
-        return rel.to_string();
-    }
-    path.to_string()
-}
-
-/// Parse diff hunk headers to extract changed line ranges.
-fn parse_diff_hunks(diff_output: &str) -> (u32, u32) {
-    let mut start = 0u32;
-    let mut end = 0u32;
-    for line in diff_output.lines() {
-        if line.starts_with("@@") {
-            // Parse @@ -a,b +c,d @@
-            if let Some(plus_part) = line.split('+').nth(1) {
-                let nums: &str = plus_part.split(' ').next().unwrap_or("0");
-                let parts: Vec<&str> = nums.split(',').collect();
-                let line_start: u32 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-                let count: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
-                if start == 0 || line_start < start {
-                    start = line_start;
-                }
-                let line_end = if count == 0 {
-                    line_start
-                } else {
-                    line_start + count - 1
-                };
-                if line_end > end {
-                    end = line_end;
-                }
-            }
-        }
-    }
-    if start == 0 {
-        (0, 0)
-    } else {
-        (start, end)
-    }
-}
 
 /// Return all files currently modified (unstaged + staged) relative to HEAD.
 /// Uses `git diff --name-only HEAD` to capture changes from any tool (Bash, Write, etc.).
@@ -211,7 +161,7 @@ fn get_changed_lines(cwd: &str, file_path: &str) -> (u32, u32) {
         .output()
     {
         let stdout = String::from_utf8_lossy(&o.stdout);
-        let (start, end) = parse_diff_hunks(&stdout);
+        let (start, end) = util::diff_line_range(&stdout);
         if start > 0 {
             return (start, end);
         }
@@ -224,7 +174,7 @@ fn get_changed_lines(cwd: &str, file_path: &str) -> (u32, u32) {
         .output()
     {
         let stdout = String::from_utf8_lossy(&o.stdout);
-        let (start, end) = parse_diff_hunks(&stdout);
+        let (start, end) = util::diff_line_range(&stdout);
         if start > 0 {
             return (start, end);
         }
@@ -237,7 +187,7 @@ fn get_changed_lines(cwd: &str, file_path: &str) -> (u32, u32) {
         .output()
     {
         let stdout = String::from_utf8_lossy(&o.stdout);
-        let (start, end) = parse_diff_hunks(&stdout);
+        let (start, end) = util::diff_line_range(&stdout);
         if start > 0 {
             return (start, end);
         }
@@ -259,25 +209,6 @@ fn get_changed_lines(cwd: &str, file_path: &str) -> (u32, u32) {
     (1, 1)
 }
 
-fn get_git_user() -> String {
-    let name = std::process::Command::new("git")
-        .args(["config", "user.name"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    let email = std::process::Command::new("git")
-        .args(["config", "user.email"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown@unknown".to_string());
-
-    format!("{} <{}>", name, email)
-}
 
 pub fn run(agent: &str, hook_input_source: &str) {
     // Read from stdin
@@ -355,7 +286,7 @@ fn build_context(input: &HookInput) -> Option<TranscriptContext> {
         .sum();
     let estimated_tokens = pricing::estimate_tokens_from_chars(total_chars);
     let cost = pricing::estimate_cost(&model, estimated_tokens / 2, estimated_tokens / 2);
-    let user = get_git_user();
+    let user = util::git_user();
     let message_count = parsed.transcript.messages.len() as u32;
 
     Some(TranscriptContext {
@@ -387,6 +318,12 @@ fn handle_user_prompt_submit(agent: &str, input: &HookInput) {
         return;
     }
 
+    // At submit time the assistant hasn't replied yet, so model_for_prompt returns None.
+    // Use the most recent model seen anywhere in the transcript as the best available estimate.
+    // The Stop handler will overwrite with the confirmed model once the response is complete.
+    let model = transcript::model_for_prompt(&ctx.parsed.transcript, prompt_number)
+        .unwrap_or(ctx.model.clone());
+
     // Use the prompt text from the hook payload when available (cleaner, no truncation),
     // otherwise fall back to parsing the transcript.
     let prompt_summary = input
@@ -412,7 +349,7 @@ fn handle_user_prompt_submit(agent: &str, input: &HookInput) {
     let receipt = Receipt {
         id: Receipt::new_id(),
         provider: agent.to_string(),
-        model: ctx.model,
+        model,
         session_id: ctx.parsed.session_id,
         prompt_summary,
         prompt_hash: ctx.prompt_hash,
@@ -425,6 +362,8 @@ fn handle_user_prompt_submit(agent: &str, input: &HookInput) {
         ai_response_time_secs: None,
         prompt_submitted_at: Some(Utc::now()), // Record exact submission time for per-prompt duration
         prompt_duration_secs: None,            // Computed at Stop time
+        accepted_lines: None,
+        overridden_lines: None,
         user: ctx.user,
         file_path: String::new(),
         line_range: (0, 0),
@@ -451,14 +390,20 @@ fn handle_file_change(agent: &str, input: &HookInput) {
 
     let prompt_number = transcript::count_user_prompts(&ctx.parsed.transcript);
 
-    let mut conversation_turns = transcript::extract_conversation_turns(
+    // Use the model that actually responded to this specific prompt.
+    let model = transcript::model_for_prompt(&ctx.parsed.transcript, prompt_number)
+        .unwrap_or(ctx.model.clone());
+
+    // Only extract conversation turns for THIS prompt — not the whole session history.
+    let mut conversation_turns = transcript::extract_conversation_for_prompt(
         &ctx.parsed.transcript,
+        prompt_number,
         ctx.cfg.capture.max_prompt_length,
         &|text| redact::redact_secrets_with_config(text, &ctx.cfg),
     );
     for turn in &mut conversation_turns {
         if let Some(ref mut files) = turn.files_touched {
-            *files = files.iter().map(|f| make_relative(f, &ctx.cwd)).collect();
+            *files = files.iter().map(|f| util::make_relative(f, &ctx.cwd)).collect();
         }
     }
 
@@ -472,7 +417,7 @@ fn handle_file_change(agent: &str, input: &HookInput) {
         .file_paths
         .iter()
         .filter_map(|f| {
-            let rel = make_relative(f, &ctx.cwd);
+            let rel = util::make_relative(f, &ctx.cwd);
             // Skip internal Claude scratch files
             if rel.starts_with(".claude/") || rel.contains("/tool-results/") {
                 return None;
@@ -504,7 +449,7 @@ fn handle_file_change(agent: &str, input: &HookInput) {
     let receipt = Receipt {
         id: Receipt::new_id(),
         provider: agent.to_string(),
-        model: ctx.model,
+        model,
         session_id: ctx.parsed.session_id,
         prompt_summary,
         prompt_hash: ctx.prompt_hash,
@@ -517,6 +462,8 @@ fn handle_file_change(agent: &str, input: &HookInput) {
         ai_response_time_secs: ctx.parsed.avg_response_time_secs,
         prompt_submitted_at: None, // Preserved from UserPromptSubmit via upsert merge
         prompt_duration_secs: None, // Computed at Stop time
+        accepted_lines: None,
+        overridden_lines: None,
         user: ctx.user,
         file_path: files_changed
             .first()
@@ -607,10 +554,12 @@ fn handle_stop(agent: &str, input: &HookInput) {
             if !missing_files.is_empty() {
                 // Synthesise a minimal receipt that the upsert merge logic will fold into
                 // the existing one for (session_id, last_pn).
+                let patch_model = transcript::model_for_prompt(&ctx.parsed.transcript, last_pn)
+                    .unwrap_or(ctx.model.clone());
                 let patch = Receipt {
                     id: Receipt::new_id(),
                     provider: agent.to_string(),
-                    model: ctx.model.clone(),
+                    model: patch_model,
                     session_id: ctx.parsed.session_id.clone(),
                     prompt_summary: String::new(),
                     prompt_hash: ctx.prompt_hash.clone(),
@@ -623,6 +572,8 @@ fn handle_stop(agent: &str, input: &HookInput) {
                     ai_response_time_secs: ctx.parsed.avg_response_time_secs,
                     prompt_submitted_at: None, // Preserved from existing receipt via upsert merge
                     prompt_duration_secs: None,
+                    accepted_lines: None,
+                    overridden_lines: None,
                     user: ctx.user.clone(),
                     file_path: missing_files
                         .first()
@@ -644,18 +595,6 @@ fn handle_stop(agent: &str, input: &HookInput) {
         }
     }
 
-    // Build conversation turns once — they capture the session up to this point.
-    let mut conversation_turns = transcript::extract_conversation_turns(
-        &ctx.parsed.transcript,
-        ctx.cfg.capture.max_prompt_length,
-        &|text| redact::redact_secrets_with_config(text, &ctx.cfg),
-    );
-    for turn in &mut conversation_turns {
-        if let Some(ref mut files) = turn.files_touched {
-            *files = files.iter().map(|f| make_relative(f, &ctx.cwd)).collect();
-        }
-    }
-
     let tools = extract_tools_used(&ctx.parsed.transcript);
     let mcps = extract_mcp_servers(&ctx.parsed.transcript);
     let agents = extract_agents_spawned(&ctx.parsed.transcript);
@@ -665,6 +604,11 @@ fn handle_stop(agent: &str, input: &HookInput) {
     // created by UserPromptSubmit with full conversation, tools, cost, and session timing.
     // The upsert merge logic preserves any file changes already written by PostToolUse.
     let current_pn = total_prompts;
+
+    // Use the model from the assistant messages that actually responded to this prompt.
+    // This correctly handles model switches mid-session (e.g. sonnet → opus).
+    let current_model = transcript::model_for_prompt(&ctx.parsed.transcript, current_pn)
+        .unwrap_or(ctx.model.clone());
 
     // Compute per-prompt duration from the submission timestamp stored at UserPromptSubmit.
     // This avoids the inflated session_duration_secs which spans the entire session JSONL
@@ -684,10 +628,23 @@ fn handle_stop(agent: &str, input: &HookInput) {
         })
         .unwrap_or_default();
 
+    // Extract conversation scoped to ONLY this prompt — prevents previous-session/prompt bleed.
+    let mut current_turns = transcript::extract_conversation_for_prompt(
+        &ctx.parsed.transcript,
+        current_pn,
+        ctx.cfg.capture.max_prompt_length,
+        &|text| redact::redact_secrets_with_config(text, &ctx.cfg),
+    );
+    for turn in &mut current_turns {
+        if let Some(ref mut files) = turn.files_touched {
+            *files = files.iter().map(|f| util::make_relative(f, &ctx.cwd)).collect();
+        }
+    }
+
     let current_receipt = Receipt {
         id: Receipt::new_id(),
         provider: agent.to_string(),
-        model: ctx.model.clone(),
+        model: current_model.clone(),
         session_id: ctx.parsed.session_id.clone(),
         prompt_summary: current_summary,
         prompt_hash: ctx.prompt_hash.clone(),
@@ -700,6 +657,8 @@ fn handle_stop(agent: &str, input: &HookInput) {
         ai_response_time_secs: ctx.parsed.avg_response_time_secs,
         prompt_submitted_at, // Preserved from UserPromptSubmit via upsert merge
         prompt_duration_secs, // Wall-clock time for this specific prompt only
+        accepted_lines: None,
+        overridden_lines: None,
         user: ctx.user.clone(),
         file_path: String::new(),
         line_range: (0, 0),
@@ -711,10 +670,10 @@ fn handle_stop(agent: &str, input: &HookInput) {
         tools_used: tools.clone(),
         mcp_servers: mcps.clone(),
         agents_spawned: agents.clone(),
-        conversation: if conversation_turns.is_empty() {
+        conversation: if current_turns.is_empty() {
             None
         } else {
-            Some(conversation_turns.clone())
+            Some(current_turns)
         },
     };
     staging::upsert_receipt_in(&current_receipt, &ctx.cwd);
@@ -734,10 +693,27 @@ fn handle_stop(agent: &str, input: &HookInput) {
             })
             .unwrap_or_default();
 
+        // Each retrospective prompt may have been answered by a different model.
+        let pn_model = transcript::model_for_prompt(&ctx.parsed.transcript, pn)
+            .unwrap_or(ctx.model.clone());
+
+        // Each retrospective receipt gets only its own prompt's conversation.
+        let mut pn_turns = transcript::extract_conversation_for_prompt(
+            &ctx.parsed.transcript,
+            pn,
+            ctx.cfg.capture.max_prompt_length,
+            &|text| redact::redact_secrets_with_config(text, &ctx.cfg),
+        );
+        for turn in &mut pn_turns {
+            if let Some(ref mut files) = turn.files_touched {
+                *files = files.iter().map(|f| util::make_relative(f, &ctx.cwd)).collect();
+            }
+        }
+
         let receipt = Receipt {
             id: Receipt::new_id(),
             provider: agent.to_string(),
-            model: ctx.model.clone(),
+            model: pn_model,
             session_id: ctx.parsed.session_id.clone(),
             prompt_summary,
             prompt_hash: ctx.prompt_hash.clone(),
@@ -750,6 +726,8 @@ fn handle_stop(agent: &str, input: &HookInput) {
             ai_response_time_secs: ctx.parsed.avg_response_time_secs,
             prompt_submitted_at: None, // Not tracked for retrospectively-created receipts
             prompt_duration_secs: None,
+            accepted_lines: None,
+            overridden_lines: None,
             user: ctx.user.clone(),
             file_path: String::new(),
             line_range: (0, 0),
@@ -761,10 +739,10 @@ fn handle_stop(agent: &str, input: &HookInput) {
             tools_used: tools.clone(),
             mcp_servers: mcps.clone(),
             agents_spawned: agents.clone(),
-            conversation: if conversation_turns.is_empty() {
+            conversation: if pn_turns.is_empty() {
                 None
             } else {
-                Some(conversation_turns.clone())
+                Some(pn_turns)
             },
         };
 
@@ -813,34 +791,4 @@ mod tests {
         assert!(input.prompt.is_none());
     }
 
-    #[test]
-    fn test_parse_diff_hunks() {
-        let diff = "@@ -1,3 +1,5 @@\n some code\n@@ -10,2 +12,4 @@\n more code\n";
-        let (start, end) = parse_diff_hunks(diff);
-        assert_eq!(start, 1);
-        assert_eq!(end, 15); // 12 + 4 - 1
-    }
-
-    #[test]
-    fn test_parse_diff_hunks_empty() {
-        let (start, end) = parse_diff_hunks("");
-        assert_eq!(start, 0);
-        assert_eq!(end, 0);
-    }
-
-    #[test]
-    fn test_make_relative() {
-        assert_eq!(
-            make_relative("/home/user/project/src/main.rs", "/home/user/project"),
-            "src/main.rs"
-        );
-        assert_eq!(
-            make_relative("src/main.rs", "/home/user/project"),
-            "src/main.rs"
-        );
-        assert_eq!(
-            make_relative("/other/path/file.rs", "/home/user/project"),
-            "/other/path/file.rs"
-        );
-    }
 }

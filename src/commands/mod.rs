@@ -1,9 +1,13 @@
 pub mod analytics;
 pub mod audit;
 pub mod blame;
+pub mod check_provenance;
 pub mod checkpoint;
+pub mod diff;
+pub mod github;
 pub mod license_scan;
 pub mod prompt_injection;
+pub mod rebase_notes;
 pub mod record;
 pub mod redact_test;
 pub mod report;

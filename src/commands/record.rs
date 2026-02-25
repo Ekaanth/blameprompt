@@ -1,5 +1,5 @@
 use crate::commands::staging;
-use crate::core::{config, pricing, receipt::Receipt, redact, transcript};
+use crate::core::{config, pricing, receipt::Receipt, redact, transcript, util};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use transcript::{extract_agents_spawned, extract_mcp_servers, extract_tools_used};
@@ -67,11 +67,11 @@ pub fn run(session_path: &str, provider: Option<&str>) {
     // Relativize files_touched in conversation turns
     for turn in &mut conversation_turns {
         if let Some(ref mut files) = turn.files_touched {
-            *files = files.iter().map(|f| make_relative(f, &cwd)).collect();
+            *files = files.iter().map(|f| util::make_relative(f, &cwd)).collect();
         }
     }
 
-    let user = get_git_user();
+    let user = util::git_user();
     let message_count = parsed.transcript.messages.len() as u32;
 
     // Build files_changed list
@@ -79,7 +79,7 @@ pub fn run(session_path: &str, provider: Option<&str>) {
         .files_modified
         .iter()
         .map(|f| crate::core::receipt::FileChange {
-            path: make_relative(f, &cwd),
+            path: util::make_relative(f, &cwd),
             line_range: (1, 1), // Unknown without diff context
             blob_hash: None,
             additions: 0,
@@ -122,6 +122,8 @@ pub fn run(session_path: &str, provider: Option<&str>) {
         },
         prompt_submitted_at: None,
         prompt_duration_secs: None,
+        accepted_lines: None,
+        overridden_lines: None,
     };
 
     staging::upsert_receipt(&receipt);
@@ -139,39 +141,3 @@ pub fn run(session_path: &str, provider: Option<&str>) {
     println!("\nReceipts added to staging. They will be attached on next commit.");
 }
 
-/// Convert an absolute path to a path relative to `base`.
-fn make_relative(path: &str, base: &str) -> String {
-    let path = path.trim();
-    let base = base.trim_end_matches('/');
-    if base.is_empty() || base == "." {
-        return path.to_string();
-    }
-    if let Some(rel) = path.strip_prefix(base) {
-        let rel = rel.strip_prefix('/').unwrap_or(rel);
-        if rel.is_empty() {
-            return path.to_string();
-        }
-        return rel.to_string();
-    }
-    path.to_string()
-}
-
-fn get_git_user() -> String {
-    let name = std::process::Command::new("git")
-        .args(["config", "user.name"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    let email = std::process::Command::new("git")
-        .args(["config", "user.email"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown@unknown".to_string());
-
-    format!("{} <{}>", name, email)
-}

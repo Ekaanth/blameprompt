@@ -164,6 +164,8 @@ pub fn search_prompts(query: &str, limit: usize) -> Result<Vec<(String, Receipt)
                     conversation: None,    // SQLite cache doesn't store conversation turns
                     prompt_submitted_at: None,
                     prompt_duration_secs: None,
+                    accepted_lines: None,
+                    overridden_lines: None,
                 },
             ))
         })

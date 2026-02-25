@@ -847,6 +847,19 @@ fn write_prompt_details(md: &mut String, entries: &[audit::AuditEntry]) {
             if let Some(response_time) = r.ai_response_time_secs {
                 writeln!(md, "- Avg AI response: {:.1}s", response_time).ok();
             }
+            // Show accepted/overridden stats when available (computed at Attach time)
+            if let (Some(accepted), Some(overridden)) = (r.accepted_lines, r.overridden_lines) {
+                let total = accepted + overridden;
+                let accept_pct = if total > 0 { (accepted as f64 / total as f64) * 100.0 } else { 100.0 };
+                writeln!(
+                    md,
+                    "- Acceptance rate: {:.0}% ({} accepted, {} overridden by human)",
+                    accept_pct, accepted, overridden
+                )
+                .ok();
+            } else if let Some(accepted) = r.accepted_lines {
+                writeln!(md, "- Lines accepted: {}", accepted).ok();
+            }
             writeln!(md).ok();
         }
 

@@ -1,4 +1,5 @@
 use crate::commands::audit;
+use crate::core::util;
 use crate::git::notes;
 use comfy_table::Table;
 use serde::Serialize;
@@ -139,7 +140,7 @@ pub fn run(query: &str, limit: usize, format: &str) {
     ]);
 
     for (sha, r) in &matches {
-        let sha_short = if sha.len() >= 8 { &sha[..8] } else { sha };
+        let sha_short = util::short_sha(sha);
         let prompt: String = r.prompt_summary.chars().take(50).collect();
         let file_changes = r.all_file_changes();
         let files_display = if file_changes.len() == 1 {
@@ -149,7 +150,7 @@ pub fn run(query: &str, limit: usize, format: &str) {
         };
 
         table.add_row(vec![
-            sha_short,
+            sha_short.as_str(),
             &r.provider,
             &r.model,
             &files_display,

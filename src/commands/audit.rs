@@ -1,4 +1,4 @@
-use crate::core::receipt::Receipt;
+use crate::core::{receipt::Receipt, util};
 use crate::git::notes;
 use chrono::Utc;
 use comfy_table::Table;
@@ -258,11 +258,7 @@ fn generate_markdown(entries: &[AuditEntry]) -> String {
     if !committed.is_empty() {
         md.push_str("## Committed Changes\n");
         for entry in &committed {
-            let sha_display = if entry.commit_sha.len() >= 8 {
-                &entry.commit_sha[..8]
-            } else {
-                &entry.commit_sha
-            };
+            let sha_display = util::short_sha(&entry.commit_sha);
             md.push_str(&format!(
                 "### Commit: {} - {}\n",
                 sha_display, entry.commit_message
@@ -327,11 +323,7 @@ pub fn run(
             println!("commit_sha,date,author,message,provider,model,session_id,message_count,cost_usd,files,total_lines,prompt_summary,prompt_hash");
             for entry in &entries {
                 for r in &entry.receipts {
-                    let sha_display = if entry.commit_sha.len() >= 8 {
-                        &entry.commit_sha[..8]
-                    } else {
-                        &entry.commit_sha
-                    };
+                    let sha_display = util::short_sha(&entry.commit_sha);
                     let files_str: Vec<String> = r
                         .all_file_paths()
                         .iter()
@@ -394,11 +386,7 @@ pub fn run(
 
             for entry in &entries {
                 for r in &entry.receipts {
-                    let sha_display = if entry.commit_sha.len() >= 8 {
-                        &entry.commit_sha[..8]
-                    } else {
-                        &entry.commit_sha
-                    };
+                    let sha_display = util::short_sha(&entry.commit_sha);
                     let date_display = if entry.commit_date.len() >= 10 {
                         &entry.commit_date[..10]
                     } else {
@@ -411,7 +399,7 @@ pub fn run(
                         format!("{} files", file_count)
                     };
                     table.add_row(vec![
-                        sha_display,
+                        sha_display.as_str(),
                         date_display,
                         &entry.commit_author,
                         &r.provider,

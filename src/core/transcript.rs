@@ -1,24 +1,21 @@
 use chrono::{DateTime, Utc};
+use std::collections::HashSet;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub enum Message {
     User {
         text: String,
-        #[allow(dead_code)]
-        timestamp: Option<String>,
     },
     Assistant {
         text: String,
-        #[allow(dead_code)]
-        timestamp: Option<String>,
+        /// The model that generated this specific response (e.g. "claude-opus-4-6").
+        /// Stored per-message so model switches mid-session are tracked correctly.
+        model: Option<String>,
     },
     ToolUse {
         name: String,
-        #[allow(dead_code)]
         input: serde_json::Value,
-        #[allow(dead_code)]
-        timestamp: Option<String>,
     },
 }
 
@@ -55,6 +52,8 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
     let mut messages = Vec::new();
     let mut model: Option<String> = None;
     let mut files_modified = Vec::new();
+    // Track AskUserQuestion tool_use IDs so we can capture the user's selected answers.
+    let mut ask_question_ids: HashSet<String> = HashSet::new();
 
     let mut first_timestamp: Option<DateTime<Utc>> = None;
     let mut last_timestamp: Option<DateTime<Utc>> = None;
@@ -98,19 +97,16 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
             }
         }
 
-        let ts_str = entry
-            .get("timestamp")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
         match entry.get("type").and_then(|v| v.as_str()) {
             Some("user") => {
                 let content_val = entry.get("message").and_then(|m| m.get("content"));
                 // Claude Code transcripts use either a plain string or an array of content
                 // blocks (e.g. [{"type":"text","text":"..."},{"type":"tool_result",...}]).
                 // Only "text" blocks represent the human's actual typed message; tool_result
-                // blocks are feedback from tool calls and should be ignored.
-                let text = if let Some(s) = content_val.and_then(|c| c.as_str()) {
+                // blocks are feedback from tool calls and should be ignored — EXCEPT for
+                // tool_result blocks that are answers to AskUserQuestion, which we capture
+                // with a `[choice] ` prefix so they appear in conversation turns.
+                let mut text = if let Some(s) = content_val.and_then(|c| c.as_str()) {
                     s.to_string()
                 } else if let Some(arr) = content_val.and_then(|c| c.as_array()) {
                     let parts: Vec<&str> = arr
@@ -127,19 +123,44 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                 } else {
                     String::new()
                 };
-                messages.push(Message::User {
-                    text,
-                    timestamp: ts_str,
-                });
+
+                // Capture AskUserQuestion answers from tool_result blocks.
+                if let Some(arr) = content_val.and_then(|c| c.as_array()) {
+                    let answers: Vec<String> = arr
+                        .iter()
+                        .filter_map(|item| {
+                            if item.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+                                return None;
+                            }
+                            let tuid = item.get("tool_use_id").and_then(|v| v.as_str())?;
+                            if !ask_question_ids.contains(tuid) {
+                                return None;
+                            }
+                            item.get("content").map(extract_tool_result_text).filter(|s| !s.is_empty())
+                        })
+                        .collect();
+                    if !answers.is_empty() {
+                        let choice = format!("[choice] {}", answers.join("; "));
+                        if text.is_empty() {
+                            text = choice;
+                        } else {
+                            text.push('\n');
+                            text.push_str(&choice);
+                        }
+                    }
+                }
+
+                messages.push(Message::User { text });
             }
             Some("assistant") => {
                 let msg = entry.get("message");
 
-                // Extract model from first assistant message that has it
-                if model.is_none() {
-                    if let Some(m) = msg.and_then(|m| m.get("model")).and_then(|v| v.as_str()) {
-                        model = Some(m.to_string());
-                    }
+                // Extract model from this assistant message (always update — last seen wins,
+                // so model switches during a session are reflected in the global fallback).
+                let entry_model: Option<String> =
+                    msg.and_then(|m| m.get("model")).and_then(|v| v.as_str()).map(String::from);
+                if entry_model.is_some() {
+                    model = entry_model.clone();
                 }
 
                 // Parse content array
@@ -157,7 +178,7 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                                     .to_string();
                                 messages.push(Message::Assistant {
                                     text,
-                                    timestamp: ts_str.clone(),
+                                    model: entry_model.clone(),
                                 });
                             }
                             Some("tool_use") => {
@@ -170,6 +191,14 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                                     .get("input")
                                     .cloned()
                                     .unwrap_or(serde_json::Value::Null);
+
+                                // Track AskUserQuestion IDs so we can capture the user's
+                                // selected answer from the following tool_result block.
+                                if name == "AskUserQuestion" {
+                                    if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                                        ask_question_ids.insert(id.to_string());
+                                    }
+                                }
 
                                 // Track modified files — handle both single file_path (Write/Edit)
                                 // and MultiEdit's edits array (edits[].file_path).
@@ -191,11 +220,7 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                                     }
                                 }
 
-                                messages.push(Message::ToolUse {
-                                    name,
-                                    input,
-                                    timestamp: ts_str.clone(),
-                                });
+                                messages.push(Message::ToolUse { name, input });
                             }
                             _ => {}
                         }
@@ -206,7 +231,7 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                     // Content is a plain string
                     messages.push(Message::Assistant {
                         text: content_str.to_string(),
-                        timestamp: ts_str,
+                        model: entry_model,
                     });
                 }
             }
@@ -237,10 +262,39 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
     })
 }
 
+/// Returns true if a user message text is a real typed prompt (not a UI option selection).
+/// AskUserQuestion answers are stored with a `[choice] ` prefix so they appear in
+/// conversation turns but are not counted as new prompts.
+fn is_real_prompt(text: &str) -> bool {
+    !text.is_empty() && !text.starts_with("[choice] ")
+}
+
+/// Extract displayable text from a tool_result `content` field.
+/// Handles plain strings, arrays of text blocks, and JSON objects.
+fn extract_tool_result_text(content: &serde_json::Value) -> String {
+    if let Some(s) = content.as_str() {
+        return s.to_string();
+    }
+    if let Some(arr) = content.as_array() {
+        let parts: Vec<&str> = arr
+            .iter()
+            .filter_map(|item| {
+                if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    item.get("text").and_then(|v| v.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        return parts.join("; ");
+    }
+    String::new()
+}
+
 pub fn first_user_prompt(transcript: &Transcript) -> Option<String> {
     for msg in &transcript.messages {
         if let Message::User { text, .. } = msg {
-            if !text.is_empty() {
+            if is_real_prompt(text) {
                 let truncated: String = text.chars().take(200).collect();
                 return Some(truncated);
             }
@@ -254,7 +308,7 @@ pub fn nth_user_prompt(transcript: &Transcript, n: u32) -> Option<String> {
     let mut count = 0u32;
     for msg in &transcript.messages {
         if let Message::User { text, .. } = msg {
-            if !text.is_empty() {
+            if is_real_prompt(text) {
                 count += 1;
                 if count == n {
                     let truncated: String = text.chars().take(200).collect();
@@ -270,7 +324,7 @@ pub fn nth_user_prompt(transcript: &Transcript, n: u32) -> Option<String> {
 pub fn last_user_prompt(transcript: &Transcript) -> Option<String> {
     transcript.messages.iter().rev().find_map(|msg| {
         if let Message::User { text, .. } = msg {
-            if !text.is_empty() {
+            if is_real_prompt(text) {
                 let truncated: String = text.chars().take(200).collect();
                 return Some(truncated);
             }
@@ -284,7 +338,7 @@ pub fn count_user_prompts(transcript: &Transcript) -> u32 {
     transcript
         .messages
         .iter()
-        .filter(|m| matches!(m, Message::User { text, .. } if !text.is_empty()))
+        .filter(|m| matches!(m, Message::User { text, .. } if is_real_prompt(text)))
         .count() as u32
 }
 
@@ -330,6 +384,16 @@ fn basename(path: &str) -> &str {
 /// Examples: `Bash(command: "git status")`, `Write(file: "main.rs")`
 fn tool_summary(name: &str, input: &serde_json::Value) -> String {
     let arg = match name {
+        "AskUserQuestion" => input
+            .get("questions")
+            .and_then(|q| q.as_array())
+            .and_then(|qs| qs.first())
+            .and_then(|q| q.get("question"))
+            .and_then(|v| v.as_str())
+            .map(|q| {
+                let truncated: String = q.chars().take(60).collect();
+                format!("\"{}\"", truncated)
+            }),
         "Bash" => input.get("command").and_then(|v| v.as_str()).map(|s| {
             let truncated: String = s.chars().take(80).collect();
             if s.chars().count() > 80 {
@@ -400,9 +464,16 @@ pub fn extract_conversation_turns(
             Message::User { text, .. } => {
                 if !text.is_empty() {
                     let truncated: String = text.chars().take(max_turn_length).collect();
+                    // AskUserQuestion answers are prefixed with "[choice] " — show them
+                    // as a distinct role so it's clear these are UI selections, not prompts.
+                    let role = if text.starts_with("[choice] ") {
+                        "choice".to_string()
+                    } else {
+                        "user".to_string()
+                    };
                     turns.push(ConversationTurn {
                         turn: turn_idx,
-                        role: "user".to_string(),
+                        role,
                         content: redact_fn(&truncated),
                         tool_name: None,
                         files_touched: None,
@@ -576,6 +647,74 @@ pub fn extract_agents_spawned(transcript: &Transcript) -> Vec<String> {
     agents
 }
 
+/// Return the slice of messages that belong exclusively to the Nth user prompt (1-indexed).
+///
+/// Spans from the Nth non-empty user message up to (but not including) the (N+1)th
+/// non-empty user message.  If N is out of range, returns an empty slice.
+fn prompt_message_slice(messages: &[Message], prompt_number: u32) -> &[Message] {
+    let mut count = 0u32;
+    let mut start: Option<usize> = None;
+
+    for (i, msg) in messages.iter().enumerate() {
+        if let Message::User { text, .. } = msg {
+            if is_real_prompt(text) {
+                count += 1;
+                if count == prompt_number {
+                    start = Some(i);
+                } else if count == prompt_number + 1 {
+                    if let Some(s) = start {
+                        return &messages[s..i];
+                    }
+                }
+            }
+        }
+    }
+
+    // Prompt N is the last one — return from its start to end of transcript
+    if let Some(s) = start {
+        return &messages[s..];
+    }
+
+    &[]
+}
+
+/// Return the model used for the Nth user prompt (1-indexed).
+///
+/// Scans the prompt's message slice for the last assistant message that carries a
+/// model identifier — this is the model that actually handled this prompt.
+/// Falls back to `None` if the prompt has no assistant reply yet (e.g. at UserPromptSubmit time).
+pub fn model_for_prompt(transcript: &Transcript, prompt_number: u32) -> Option<String> {
+    let slice = prompt_message_slice(&transcript.messages, prompt_number);
+    slice.iter().rev().find_map(|msg| {
+        if let Message::Assistant { model, .. } = msg {
+            model.clone()
+        } else {
+            None
+        }
+    })
+}
+
+/// Extract conversation turns for a **specific prompt** (1-indexed) only.
+///
+/// Use this instead of `extract_conversation_turns` when you want a receipt to contain
+/// only the messages that belong to a single user prompt, not the entire session history.
+pub fn extract_conversation_for_prompt(
+    transcript: &Transcript,
+    prompt_number: u32,
+    max_turn_length: usize,
+    redact_fn: &dyn Fn(&str) -> String,
+) -> Vec<crate::core::receipt::ConversationTurn> {
+    let slice = prompt_message_slice(&transcript.messages, prompt_number);
+    if slice.is_empty() {
+        return vec![];
+    }
+    // Reuse the same turn-extraction logic on just this prompt's slice
+    let sub = Transcript {
+        messages: slice.to_vec(),
+    };
+    extract_conversation_turns(&sub, max_turn_length, redact_fn)
+}
+
 pub fn full_conversation_text(transcript: &Transcript) -> String {
     let mut text = String::new();
     for msg in &transcript.messages {
@@ -668,11 +807,108 @@ mod tests {
     }
 
     #[test]
+    fn test_model_for_prompt_tracks_per_prompt_model() {
+        // Simulates a session where the user switches from sonnet to opus after prompt 1.
+        // prompt 1 → assistant replies with sonnet
+        // prompt 2 → assistant replies with opus
+        let transcript = Transcript {
+            messages: vec![
+                Message::User { text: "first prompt".to_string() },
+                Message::Assistant {
+                    text: "response 1".to_string(),
+                    model: Some("claude-sonnet-4-6".to_string()),
+                },
+                Message::User { text: "second prompt".to_string() },
+                Message::Assistant {
+                    text: "response 2".to_string(),
+                    model: Some("claude-opus-4-6".to_string()),
+                },
+            ],
+        };
+
+        assert_eq!(
+            model_for_prompt(&transcript, 1),
+            Some("claude-sonnet-4-6".to_string()),
+            "prompt 1 should use sonnet"
+        );
+        assert_eq!(
+            model_for_prompt(&transcript, 2),
+            Some("claude-opus-4-6".to_string()),
+            "prompt 2 should use opus after model switch"
+        );
+        // Out-of-range prompt → None
+        assert_eq!(model_for_prompt(&transcript, 3), None);
+    }
+
+    #[test]
+    fn test_model_from_jsonl_last_wins() {
+        // Transcript where model changes between assistant messages.
+        // The global `model` field on TranscriptParseResult should hold the LAST seen model.
+        let jsonl = r#"{"type":"user","message":{"content":"prompt 1"},"timestamp":"2026-01-01T00:00:00Z"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-6","content":[{"type":"text","text":"response 1"}]},"timestamp":"2026-01-01T00:00:01Z"}
+{"type":"user","message":{"content":"prompt 2"},"timestamp":"2026-01-01T00:00:02Z"}
+{"type":"assistant","message":{"model":"claude-opus-4-6","content":[{"type":"text","text":"response 2"}]},"timestamp":"2026-01-01T00:00:03Z"}"#;
+
+        let tmp = std::env::temp_dir().join("test_model_switch.jsonl");
+        std::fs::write(&tmp, jsonl).unwrap();
+        let result = parse_claude_jsonl(tmp.to_str().unwrap()).unwrap();
+        std::fs::remove_file(tmp).ok();
+
+        // Global model = last seen (opus)
+        assert_eq!(result.model, Some("claude-opus-4-6".to_string()));
+        // Per-prompt lookup is correct
+        assert_eq!(
+            model_for_prompt(&result.transcript, 1),
+            Some("claude-sonnet-4-6".to_string())
+        );
+        assert_eq!(
+            model_for_prompt(&result.transcript, 2),
+            Some("claude-opus-4-6".to_string())
+        );
+    }
+
+    #[test]
+    fn test_ask_user_question_answer_captured() {
+        // Simulate a session where Claude calls AskUserQuestion and the user picks an option.
+        // The answer comes back as a tool_result block in the next user message.
+        let jsonl = r#"{"type":"user","message":{"content":"implement dark mode"},"timestamp":"2026-01-01T00:00:00Z"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-6","content":[{"type":"text","text":"Which approach?"},{"type":"tool_use","id":"toolu_001","name":"AskUserQuestion","input":{"questions":[{"question":"Which approach?","header":"Approach","options":[{"label":"CSS variables"},{"label":"Theme context"}],"multiSelect":false}]}}]},"timestamp":"2026-01-01T00:00:01Z"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_001","content":[{"type":"text","text":"CSS variables"}]}]},"timestamp":"2026-01-01T00:00:02Z"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-6","content":[{"type":"text","text":"I'll use CSS variables."}]},"timestamp":"2026-01-01T00:00:03Z"}"#;
+
+        let tmp = std::env::temp_dir().join("test_ask_user.jsonl");
+        std::fs::write(&tmp, jsonl).unwrap();
+        let result = parse_claude_jsonl(tmp.to_str().unwrap()).unwrap();
+        std::fs::remove_file(tmp).ok();
+
+        // Only the real typed prompt counts — the [choice] answer does not
+        assert_eq!(count_user_prompts(&result.transcript), 1);
+        assert_eq!(
+            first_user_prompt(&result.transcript),
+            Some("implement dark mode".to_string())
+        );
+
+        // The [choice] answer IS present in messages
+        let choice_msg = result.transcript.messages.iter().find(|m| {
+            matches!(m, Message::User { text, .. } if text.starts_with("[choice]"))
+        });
+        assert!(choice_msg.is_some(), "AskUserQuestion answer should be stored");
+        if let Some(Message::User { text, .. }) = choice_msg {
+            assert!(text.contains("CSS variables"), "Answer text should be captured: {}", text);
+        }
+
+        // The choice should appear as a "choice" role in conversation turns
+        let turns = extract_conversation_turns(&result.transcript, 1000, &|s| s.to_string());
+        let choice_turn = turns.iter().find(|t| t.role == "choice");
+        assert!(choice_turn.is_some(), "choice turn should appear in conversation");
+        assert!(choice_turn.unwrap().content.contains("CSS variables"));
+    }
+
+    #[test]
     fn test_first_user_prompt() {
         let transcript = Transcript {
             messages: vec![Message::User {
                 text: "write a function".to_string(),
-                timestamp: None,
             }],
         };
         assert_eq!(
@@ -737,21 +973,18 @@ mod tests {
             messages: vec![
                 Message::User {
                     text: "fix the bug".to_string(),
-                    timestamp: None,
                 },
                 Message::ToolUse {
                     name: "Bash".to_string(),
                     input: serde_json::json!({"command": "git diff"}),
-                    timestamp: None,
                 },
                 Message::ToolUse {
                     name: "Write".to_string(),
                     input: serde_json::json!({"file_path": "/home/user/src/main.rs", "content": "..."}),
-                    timestamp: None,
                 },
                 Message::Assistant {
                     text: "I fixed the bug by updating main.rs".to_string(),
-                    timestamp: None,
+                    model: None,
                 },
             ],
         };

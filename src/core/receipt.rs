@@ -55,6 +55,12 @@ pub struct Receipt {
     /// Unlike session_duration_secs (whole session), this measures only this prompt's time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_duration_secs: Option<u64>,
+    /// Lines the AI wrote that were kept unchanged in the final commit (accepted by human).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_lines: Option<u32>,
+    /// Lines the AI wrote that were subsequently modified by the human before committing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overridden_lines: Option<u32>,
     pub user: String,
     /// Deprecated: use files_changed instead. Kept for backwards compat with old git notes.
     #[serde(default)]
@@ -281,6 +287,8 @@ mod tests {
             conversation: None,
             prompt_submitted_at: None,
             prompt_duration_secs: None,
+            accepted_lines: None,
+            overridden_lines: None,
         };
 
         let json = serde_json::to_string_pretty(&receipt).unwrap();
@@ -323,6 +331,8 @@ mod tests {
             conversation: None,
             prompt_submitted_at: None,
             prompt_duration_secs: None,
+            accepted_lines: None,
+            overridden_lines: None,
         };
 
         let json = serde_json::to_string(&receipt).unwrap();
@@ -339,6 +349,8 @@ mod tests {
         assert!(!json.contains("agents_spawned"));
         assert!(!json.contains("prompt_submitted_at"));
         assert!(!json.contains("prompt_duration_secs"));
+        assert!(!json.contains("accepted_lines"));
+        assert!(!json.contains("overridden_lines"));
     }
 
     #[test]
@@ -386,6 +398,8 @@ mod tests {
             conversation: None,
             prompt_submitted_at: None,
             prompt_duration_secs: None,
+            accepted_lines: None,
+            overridden_lines: None,
         };
         let changes = receipt.all_file_changes();
         assert_eq!(changes.len(), 2);
@@ -422,6 +436,8 @@ mod tests {
             conversation: None,
             prompt_submitted_at: None,
             prompt_duration_secs: None,
+            accepted_lines: None,
+            overridden_lines: None,
         };
         let changes = receipt.all_file_changes();
         assert_eq!(changes.len(), 1);
