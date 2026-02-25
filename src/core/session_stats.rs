@@ -166,10 +166,14 @@ mod tests {
             files_changed: vec![],
             parent_receipt_id: None,
             prompt_number: None,
+            total_additions: 0,
+            total_deletions: 0,
             tools_used: vec![],
             mcp_servers: vec![],
             agents_spawned: vec![],
             conversation: None,
+            prompt_submitted_at: None,
+            prompt_duration_secs: None,
         }
     }
 

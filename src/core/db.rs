@@ -155,11 +155,15 @@ pub fn search_prompts(query: &str, limit: usize) -> Result<Vec<(String, Receipt)
                     line_range: (line_start, line_end),
                     parent_receipt_id: row.get(18)?,
                     prompt_number: None,
+                    total_additions: 0,
+                    total_deletions: 0,
                     tools_used: vec![],
                     mcp_servers: vec![],
                     agents_spawned: vec![],
                     files_changed: vec![], // SQLite cache uses legacy file_path/line_range
                     conversation: None,    // SQLite cache doesn't store conversation turns
+                    prompt_submitted_at: None,
+                    prompt_duration_secs: None,
                 },
             ))
         })

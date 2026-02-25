@@ -106,10 +106,52 @@ fi
     )
 }
 
+fn pre_push_hook(binary: &str) -> String {
+    format!(
+        r#"# BlamePrompt pre-push hook (do not edit between markers)
+{preamble}BLAMEPROMPT="{binary}"
+# Automatically push BlamePrompt notes to the same remote being pushed.
+# $1 = remote name (e.g. "origin"), $2 = remote URL
+if [ -x "$BLAMEPROMPT" ]; then
+    REMOTE="${{1:-origin}}"
+    git push "$REMOTE" refs/notes/blameprompt 2>/dev/null || true
+fi
+# /BlamePrompt
+"#,
+        preamble = PATH_PREAMBLE,
+        binary = binary
+    )
+}
+
+fn prepare_commit_msg_hook(binary: &str) -> String {
+    format!(
+        r#"# BlamePrompt prepare-commit-msg hook (do not edit between markers)
+{preamble}BLAMEPROMPT="{binary}"
+# Annotate the commit editor with how many AI receipts will be attached.
+# $1 = commit message file, $2 = commit source (empty / template / merge / squash / commit)
+if [ -x "$BLAMEPROMPT" ]; then
+    COUNT=$("$BLAMEPROMPT" staging-count 2>/dev/null || echo "0")
+    if [ "$COUNT" != "0" ]; then
+        MSG_SOURCE="${{2:-}}"
+        # Only annotate plain commits and template-based commits, not amend/merge/squash
+        if [ -z "$MSG_SOURCE" ] || [ "$MSG_SOURCE" = "template" ]; then
+            printf '\n# [BlamePrompt] %s AI receipt(s) will be attached to this commit\n' "$COUNT" >> "$1"
+        fi
+    fi
+fi
+# /BlamePrompt
+"#,
+        preamble = PATH_PREAMBLE,
+        binary = binary
+    )
+}
+
 fn all_hooks(binary: &str) -> Vec<(&'static str, String)> {
     vec![
         ("pre-commit", pre_commit_hook(binary)),
+        ("prepare-commit-msg", prepare_commit_msg_hook(binary)),
         ("post-commit", post_commit_hook(binary)),
+        ("pre-push", pre_push_hook(binary)),
         ("post-checkout", post_checkout_hook(binary)),
         ("post-merge", post_merge_hook(binary)),
         ("post-rewrite", post_rewrite_hook(binary)),
@@ -180,7 +222,9 @@ pub fn uninstall_hooks() -> Result<(), String> {
 
     let hook_names = [
         "pre-commit",
+        "prepare-commit-msg",
         "post-commit",
+        "pre-push",
         "post-checkout",
         "post-merge",
         "post-rewrite",

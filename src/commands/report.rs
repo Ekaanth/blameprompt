@@ -390,11 +390,21 @@ fn write_time_analysis(md: &mut String, receipts: &[&Receipt]) {
 
     let estimated_saved_hours = session_stats::estimate_dev_hours_saved(total_ai_lines);
 
-    // Use wall-clock time (merged intervals) when available, fall back to raw sum
+    // Use wall-clock time (merged intervals) when available.
+    // Fallback priority: per-prompt durations sum > raw session sum.
+    // Never use the raw session sum alone — it double-counts parallel sub-agent sessions.
+    let total_prompt_duration_secs: u64 = receipts
+        .iter()
+        .filter_map(|r| r.prompt_duration_secs)
+        .sum();
     let effective_duration = if stats.wall_clock_secs > 0 {
         stats.wall_clock_secs
+    } else if total_prompt_duration_secs > 0 {
+        total_prompt_duration_secs
     } else {
-        stats.total_duration_secs
+        // Last resort: use max single-session duration rather than the full sum
+        // to avoid doubling sub-agent time when timestamps are unavailable.
+        stats.per_session.values().copied().max().unwrap_or(0)
     };
 
     writeln!(md, "### Total Time Invested in AI").ok();
@@ -806,6 +816,15 @@ fn write_prompt_details(md: &mut String, entries: &[audit::AuditEntry]) {
             writeln!(md, "**Prompt:**").ok();
             writeln!(md, "> {}\n", r.prompt_summary).ok();
 
+            // Show per-prompt duration (precise) when available, else session duration
+            if let Some(duration) = r.prompt_duration_secs {
+                writeln!(
+                    md,
+                    "- Prompt duration: {}",
+                    session_stats::format_duration(duration)
+                )
+                .ok();
+            }
             // Only show session timing on first receipt per session
             if sessions_shown.insert(r.session_id.clone()) {
                 if let Some(start) = r.session_start {
@@ -819,7 +838,7 @@ fn write_prompt_details(md: &mut String, entries: &[audit::AuditEntry]) {
                 if let Some(duration) = r.session_duration_secs {
                     writeln!(
                         md,
-                        "- Session duration: {}",
+                        "- Total session duration: {}",
                         session_stats::format_duration(duration)
                     )
                     .ok();

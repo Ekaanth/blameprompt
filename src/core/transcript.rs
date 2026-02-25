@@ -105,12 +105,28 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
 
         match entry.get("type").and_then(|v| v.as_str()) {
             Some("user") => {
-                let text = entry
-                    .get("message")
-                    .and_then(|m| m.get("content"))
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("")
-                    .to_string();
+                let content_val = entry.get("message").and_then(|m| m.get("content"));
+                // Claude Code transcripts use either a plain string or an array of content
+                // blocks (e.g. [{"type":"text","text":"..."},{"type":"tool_result",...}]).
+                // Only "text" blocks represent the human's actual typed message; tool_result
+                // blocks are feedback from tool calls and should be ignored.
+                let text = if let Some(s) = content_val.and_then(|c| c.as_str()) {
+                    s.to_string()
+                } else if let Some(arr) = content_val.and_then(|c| c.as_array()) {
+                    let parts: Vec<&str> = arr
+                        .iter()
+                        .filter_map(|item| {
+                            if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                item.get("text").and_then(|t| t.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    parts.join("\n")
+                } else {
+                    String::new()
+                };
                 messages.push(Message::User {
                     text,
                     timestamp: ts_str,
@@ -155,10 +171,23 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                                     .cloned()
                                     .unwrap_or(serde_json::Value::Null);
 
-                                // Track modified files
+                                // Track modified files — handle both single file_path (Write/Edit)
+                                // and MultiEdit's edits array (edits[].file_path).
                                 if let Some(fp) = input.get("file_path").and_then(|v| v.as_str()) {
                                     if !files_modified.contains(&fp.to_string()) {
                                         files_modified.push(fp.to_string());
+                                    }
+                                } else if let Some(edits) =
+                                    input.get("edits").and_then(|e| e.as_array())
+                                {
+                                    for edit in edits {
+                                        if let Some(fp) =
+                                            edit.get("file_path").and_then(|v| v.as_str())
+                                        {
+                                            if !files_modified.contains(&fp.to_string()) {
+                                                files_modified.push(fp.to_string());
+                                            }
+                                        }
                                     }
                                 }
 
@@ -309,10 +338,28 @@ fn tool_summary(name: &str, input: &serde_json::Value) -> String {
                 format!("command: \"{}\"", truncated)
             }
         }),
-        "Write" | "Edit" | "MultiEdit" | "Read" => input
+        "Write" | "Edit" | "Read" => input
             .get("file_path")
             .and_then(|v| v.as_str())
             .map(|s| format!("file: \"{}\"", basename(s))),
+        "MultiEdit" => {
+            // MultiEdit has an edits array; show all affected filenames.
+            if let Some(edits) = input.get("edits").and_then(|e| e.as_array()) {
+                let names: Vec<&str> = edits
+                    .iter()
+                    .filter_map(|e| e.get("file_path").and_then(|v| v.as_str()))
+                    .map(basename)
+                    .collect();
+                if !names.is_empty() {
+                    return format!("MultiEdit(files: \"{}\")", names.join(", "));
+                }
+            }
+            // Fallback to single file_path if edits is absent
+            input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .map(|s| format!("file: \"{}\"", basename(s)))
+        }
         "Grep" => input.get("pattern").and_then(|v| v.as_str()).map(|s| {
             let truncated: String = s.chars().take(60).collect();
             format!("pattern: \"{}\"", truncated)
@@ -397,6 +444,18 @@ pub fn extract_conversation_turns(
                             let display_path = fp.rsplit('/').next().unwrap_or(fp).to_string();
                             if !all_files.contains(&display_path) {
                                 all_files.push(display_path);
+                            }
+                        } else if let Some(edits) = input.get("edits").and_then(|e| e.as_array()) {
+                            for edit in edits {
+                                if let Some(fp) =
+                                    edit.get("file_path").and_then(|v| v.as_str())
+                                {
+                                    let display_path =
+                                        fp.rsplit('/').next().unwrap_or(fp).to_string();
+                                    if !all_files.contains(&display_path) {
+                                        all_files.push(display_path);
+                                    }
+                                }
                             }
                         }
                         i += 1;
@@ -564,6 +623,26 @@ mod tests {
         assert!(result.avg_response_time_secs.is_some());
         let avg = result.avg_response_time_secs.unwrap();
         assert!((avg - 1.0).abs() < 0.01);
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn test_parse_user_message_array_content() {
+        // Claude Code transcripts store user messages as arrays of content blocks.
+        // Text blocks are the human's typed message; tool_result blocks are skipped.
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"fix the bug"},{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},"timestamp":"2026-01-01T00:00:00Z"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-6","content":[{"type":"text","text":"Sure"}]},"timestamp":"2026-01-01T00:00:01Z"}"#;
+
+        let tmp = std::env::temp_dir().join("test_array_content.jsonl");
+        std::fs::write(&tmp, jsonl).unwrap();
+        let result = parse_claude_jsonl(tmp.to_str().unwrap()).unwrap();
+
+        // The user message with array content should be parsed correctly
+        assert_eq!(count_user_prompts(&result.transcript), 1);
+        assert_eq!(
+            last_user_prompt(&result.transcript),
+            Some("fix the bug".to_string())
+        );
         std::fs::remove_file(tmp).ok();
     }
 

@@ -21,3 +21,6 @@ comfy-table = "7.1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 dirs = "5.0"
 toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3.14"

@@ -63,7 +63,9 @@ pub fn generate_report(from: Option<&str>, to: Option<&str>) -> Result<Analytics
         for r in &entry.receipts {
             total_receipts += 1;
             total_cost += r.cost_usd;
-            let lines = r.total_lines_changed();
+            // Use precise diff additions when available,
+            // falling back to the legacy line-range span for older receipts.
+            let lines = r.effective_total_additions();
             total_lines += lines;
             session_ids.insert(r.session_id.clone());
 

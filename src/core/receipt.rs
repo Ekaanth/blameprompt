@@ -18,6 +18,15 @@ pub struct ConversationTurn {
 pub struct FileChange {
     pub path: String,
     pub line_range: (u32, u32),
+    /// Git blob SHA of the file after this change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blob_hash: Option<String>,
+    /// Lines added in this file.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub additions: u32,
+    /// Lines deleted from this file.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub deletions: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -39,6 +48,13 @@ pub struct Receipt {
     pub session_duration_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_response_time_secs: Option<f64>,
+    /// When the user submitted THIS specific prompt (set at UserPromptSubmit hook time).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_submitted_at: Option<DateTime<Utc>>,
+    /// How long THIS prompt took to complete (from submission to Stop event), in seconds.
+    /// Unlike session_duration_secs (whole session), this measures only this prompt's time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_duration_secs: Option<u64>,
     pub user: String,
     /// Deprecated: use files_changed instead. Kept for backwards compat with old git notes.
     #[serde(default)]
@@ -55,6 +71,12 @@ pub struct Receipt {
     /// Used to create separate receipts per prompt within the same session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_number: Option<u32>,
+    /// Total lines added across all files in this prompt.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub total_additions: u32,
+    /// Total lines deleted across all files in this prompt.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub total_deletions: u32,
     /// Tools used during this prompt session (e.g., "Bash", "Write", "Edit", "Grep").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools_used: Vec<String>,
@@ -72,6 +94,10 @@ fn default_line_range() -> (u32, u32) {
     (1, 1)
 }
 
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
 impl Receipt {
     pub fn new_id() -> String {
         Uuid::new_v4().to_string()
@@ -86,6 +112,9 @@ impl Receipt {
             vec![FileChange {
                 path: self.file_path.clone(),
                 line_range: self.line_range,
+                blob_hash: None,
+                additions: 0,
+                deletions: 0,
             }]
         } else {
             vec![]
@@ -100,7 +129,7 @@ impl Receipt {
             .collect()
     }
 
-    /// Total lines changed across all files.
+    /// Total lines changed across all files (line range span, legacy metric).
     pub fn total_lines_changed(&self) -> u32 {
         self.all_file_changes()
             .iter()
@@ -112,6 +141,22 @@ impl Receipt {
                 }
             })
             .sum()
+    }
+
+    /// Sum additions and deletions from file-level stats when receipt-level totals are absent.
+    pub fn effective_total_additions(&self) -> u32 {
+        if self.total_additions > 0 {
+            return self.total_additions;
+        }
+        self.all_file_changes().iter().map(|fc| fc.additions).sum()
+    }
+
+    #[allow(dead_code)]
+    pub fn effective_total_deletions(&self) -> u32 {
+        if self.total_deletions > 0 {
+            return self.total_deletions;
+        }
+        self.all_file_changes().iter().map(|fc| fc.deletions).sum()
     }
 }
 
@@ -214,18 +259,28 @@ mod tests {
                 FileChange {
                     path: "src/main.rs".to_string(),
                     line_range: (1, 10),
+                    blob_hash: None,
+                    additions: 10,
+                    deletions: 0,
                 },
                 FileChange {
                     path: "src/lib.rs".to_string(),
                     line_range: (5, 20),
+                    blob_hash: None,
+                    additions: 16,
+                    deletions: 2,
                 },
             ],
             parent_receipt_id: None,
             prompt_number: Some(1),
+            total_additions: 26,
+            total_deletions: 2,
             tools_used: vec!["Write".to_string(), "Bash".to_string()],
             mcp_servers: vec![],
             agents_spawned: vec![],
             conversation: None,
+            prompt_submitted_at: None,
+            prompt_duration_secs: None,
         };
 
         let json = serde_json::to_string_pretty(&receipt).unwrap();
@@ -260,10 +315,14 @@ mod tests {
             files_changed: vec![],
             parent_receipt_id: None,
             prompt_number: None,
+            total_additions: 0,
+            total_deletions: 0,
             tools_used: vec![],
             mcp_servers: vec![],
             agents_spawned: vec![],
             conversation: None,
+            prompt_submitted_at: None,
+            prompt_duration_secs: None,
         };
 
         let json = serde_json::to_string(&receipt).unwrap();
@@ -278,6 +337,8 @@ mod tests {
         assert!(!json.contains("tools_used"));
         assert!(!json.contains("mcp_servers"));
         assert!(!json.contains("agents_spawned"));
+        assert!(!json.contains("prompt_submitted_at"));
+        assert!(!json.contains("prompt_duration_secs"));
     }
 
     #[test]
@@ -303,18 +364,28 @@ mod tests {
                 FileChange {
                     path: "a.rs".to_string(),
                     line_range: (1, 10),
+                    blob_hash: None,
+                    additions: 0,
+                    deletions: 0,
                 },
                 FileChange {
                     path: "b.rs".to_string(),
                     line_range: (5, 15),
+                    blob_hash: None,
+                    additions: 0,
+                    deletions: 0,
                 },
             ],
             parent_receipt_id: None,
             prompt_number: None,
+            total_additions: 0,
+            total_deletions: 0,
             tools_used: vec![],
             mcp_servers: vec![],
             agents_spawned: vec![],
             conversation: None,
+            prompt_submitted_at: None,
+            prompt_duration_secs: None,
         };
         let changes = receipt.all_file_changes();
         assert_eq!(changes.len(), 2);
@@ -343,10 +414,14 @@ mod tests {
             files_changed: vec![],
             parent_receipt_id: None,
             prompt_number: None,
+            total_additions: 0,
+            total_deletions: 0,
             tools_used: vec![],
             mcp_servers: vec![],
             agents_spawned: vec![],
             conversation: None,
+            prompt_submitted_at: None,
+            prompt_duration_secs: None,
         };
         let changes = receipt.all_file_changes();
         assert_eq!(changes.len(), 1);

@@ -86,7 +86,7 @@ fn print_install_banner(use_stderr: bool) {
         String::new(),
         format!("  {bg}[done]{r} Claude Code hooks installed (10 lifecycle hooks)"),
         format!("         {d}→ {home}/.claude/settings.json{r}"),
-        format!("  {bg}[done]{r} Git template configured (5 git hooks)"),
+        format!("  {bg}[done]{r} Git template configured (7 git hooks)"),
         format!("         {d}→ {home}/.blameprompt/git-template{r}"),
         format!("  {bg}[done]{r} All future repos will auto-track AI prompts"),
         String::new(),
@@ -246,7 +246,8 @@ pub fn run_init(global: bool) -> Result<(), String> {
         println!("Installing BlamePrompt in this repo...");
         println!();
         println!("  {bg}[done]{r} Git hooks installed");
-        println!("         {d}pre-commit, post-commit, post-checkout, post-merge, post-rewrite{r}");
+        println!("         {d}pre-commit, prepare-commit-msg, post-commit, pre-push,{r}");
+        println!("         {d}post-checkout, post-merge, post-rewrite{r}");
         println!("  {bg}[done]{r} Staging directory created (.blameprompt/)");
         println!("  {bg}[done]{r} Updated .gitignore");
         println!();

@@ -81,6 +81,9 @@ pub fn run(session_path: &str, provider: Option<&str>) {
         .map(|f| crate::core::receipt::FileChange {
             path: make_relative(f, &cwd),
             line_range: (1, 1), // Unknown without diff context
+            blob_hash: None,
+            additions: 0,
+            deletions: 0,
         })
         .collect();
 
@@ -107,6 +110,8 @@ pub fn run(session_path: &str, provider: Option<&str>) {
         files_changed,
         parent_receipt_id: None,
         prompt_number: None,
+        total_additions: 0,
+        total_deletions: 0,
         tools_used: extract_tools_used(&parsed.transcript),
         mcp_servers: extract_mcp_servers(&parsed.transcript),
         agents_spawned: extract_agents_spawned(&parsed.transcript),
@@ -115,6 +120,8 @@ pub fn run(session_path: &str, provider: Option<&str>) {
         } else {
             Some(conversation_turns.clone())
         },
+        prompt_submitted_at: None,
+        prompt_duration_secs: None,
     };
 
     staging::upsert_receipt(&receipt);
