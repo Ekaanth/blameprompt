@@ -1,0 +1,25 @@
+{
+  "blameprompt_version": "0.1.0",
+  "receipts": [
+    {
+      "id": "9943646b-717d-4498-9f5a-d5eff1401485",
+      "provider": "claude",
+      "model": "claude-sonnet-4-6",
+      "session_id": "633dd148-8b7a-494b-8ce0-d4fea3b49ded",
+      "prompt_summary": "(base) [REDACTED_HOST] blameprompt % blameprompt audit\nNo AI-generated code found in this repository.\n(base) [REDACTED_HOST] blameprompt % blameprompt analytics\nOVERVIEW\n========\nTotal commits scanned: 12\nCommits with AI: 0 (0.0%)\nTotal sessions: 0\nTotal AI lines: 0\n\nCOST\n====\nTotal estimated cost: $0.00\n\nBY MODEL\n========\n+-------+----------+-------+-----------+\n| Model | Sessions | Files | Est. Cost |\n+======================================+\n+-------+----------+-------+-----------+\n\nBY USER\n=======\n+------+----------+----------+-----------+\n| User | Sessions | AI Lines | Est. Cost |\n+========================================+\n+------+----------+----------+-----------+\nis not reading from the previous commited code and prompts why is that?",
+      "prompt_hash": "sha256:f8f226966e486edb9eec6e39f4c9d5273518e347ae04aa455abb71d192f919aa",
+      "message_count": 1179,
+      "cost_usd": 0.0,
+      "timestamp": "2026-02-25T11:42:36.002470Z",
+      "session_start": "2026-02-25T06:28:17.467Z",
+      "prompt_submitted_at": "2026-02-25T11:42:36.002470Z",
+      "user": "Ekaanth <akanth1994@gmail.com>",
+      "file_path": "",
+      "line_range": [
+        0,
+        0
+      ],
+      "prompt_number": 24
+    }
+  ]
+}
