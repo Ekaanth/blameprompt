@@ -85,7 +85,11 @@ pub fn diff_line_range(diff_output: &str) -> (u32, u32) {
             }
         }
     }
-    if start == 0 { (0, 0) } else { (start, end) }
+    if start == 0 {
+        (0, 0)
+    } else {
+        (start, end)
+    }
 }
 
 #[cfg(test)]
@@ -102,7 +106,10 @@ mod tests {
 
     #[test]
     fn test_make_relative_already_relative() {
-        assert_eq!(make_relative("src/main.rs", "/home/user/project"), "src/main.rs");
+        assert_eq!(
+            make_relative("src/main.rs", "/home/user/project"),
+            "src/main.rs"
+        );
     }
 
     #[test]

@@ -70,10 +70,18 @@ pub fn generate_hackathon_report(
     author: Option<&str>,
     include_uncommitted: bool,
 ) -> Result<(), String> {
-    let hackathon_start = parse_datetime(start_str)
-        .ok_or_else(|| format!("Invalid --start: \"{}\". Use ISO 8601 (e.g. 2026-02-26T09:00:00Z).", start_str))?;
-    let hackathon_end = parse_datetime(end_str)
-        .ok_or_else(|| format!("Invalid --end: \"{}\". Use ISO 8601 (e.g. 2026-02-26T21:00:00Z).", end_str))?;
+    let hackathon_start = parse_datetime(start_str).ok_or_else(|| {
+        format!(
+            "Invalid --start: \"{}\". Use ISO 8601 (e.g. 2026-02-26T09:00:00Z).",
+            start_str
+        )
+    })?;
+    let hackathon_end = parse_datetime(end_str).ok_or_else(|| {
+        format!(
+            "Invalid --end: \"{}\". Use ISO 8601 (e.g. 2026-02-26T21:00:00Z).",
+            end_str
+        )
+    })?;
 
     if hackathon_end <= hackathon_start {
         return Err("--end must be after --start".to_string());
@@ -91,25 +99,39 @@ pub fn generate_hackathon_report(
     let all_receipts: Vec<&Receipt> = entries.iter().flat_map(|e| &e.receipts).collect();
 
     if all_receipts.is_empty() {
-        return Err("No AI receipts found. Is BlamePrompt installed and have you used AI coding tools?".to_string());
+        return Err(
+            "No AI receipts found. Is BlamePrompt installed and have you used AI coding tools?"
+                .to_string(),
+        );
     }
 
     let timeline = build_timeline(&all_receipts, hackathon_start, hackathon_end);
-    let anomalies = detect_anomalies(&all_receipts, &entries, &timeline, hackathon_start, hackathon_end);
+    let anomalies = detect_anomalies(
+        &all_receipts,
+        &entries,
+        &timeline,
+        hackathon_start,
+        hackathon_end,
+    );
     let integrity_score = calculate_integrity_score(&anomalies);
     let file_attribution = build_file_attribution(&all_receipts);
 
     let mut md = String::with_capacity(8192);
     write_header(&mut md, hackathon_start, hackathon_end, author);
-    write_summary(&mut md, &all_receipts, &timeline, &anomalies, integrity_score);
+    write_summary(
+        &mut md,
+        &all_receipts,
+        &timeline,
+        &anomalies,
+        integrity_score,
+    );
     write_timeline(&mut md, &timeline);
     write_code_attribution(&mut md, &all_receipts, &file_attribution);
     write_anomaly_flags(&mut md, &anomalies);
     write_integrity_assessment(&mut md, &anomalies, integrity_score);
     write_footer(&mut md);
 
-    std::fs::write(output_path, &md)
-        .map_err(|e| format!("Cannot write report: {}", e))?;
+    std::fs::write(output_path, &md).map_err(|e| format!("Cannot write report: {}", e))?;
     println!("Hackathon report written to {}", output_path);
     println!(
         "  Integrity score: {}/100 ({})",
@@ -132,11 +154,7 @@ fn build_timeline(
         .iter()
         .map(|r| {
             let ts = r.prompt_submitted_at.unwrap_or(r.timestamp);
-            let files: Vec<String> = r
-                .all_file_paths()
-                .iter()
-                .map(|f| make_rel(f))
-                .collect();
+            let files: Vec<String> = r.all_file_paths().iter().map(|f| make_rel(f)).collect();
             TimelineEntry {
                 timestamp: ts,
                 prompt_summary: r.prompt_summary.chars().take(200).collect(),
@@ -230,10 +248,11 @@ fn detect_pre_written_code(receipts: &[&Receipt]) -> Vec<AnomalyFlag> {
     for r in receipts {
         let ts = r.prompt_submitted_at.unwrap_or(r.timestamp);
         for fc in r.all_file_changes() {
-            file_history
-                .entry(make_rel(&fc.path))
-                .or_default()
-                .push((ts, fc.additions, r.prompt_summary.clone()));
+            file_history.entry(make_rel(&fc.path)).or_default().push((
+                ts,
+                fc.additions,
+                r.prompt_summary.clone(),
+            ));
         }
     }
 
@@ -367,10 +386,7 @@ fn detect_duplicate_prompt_hashes(receipts: &[&Receipt]) -> Vec<AnomalyFlag> {
 }
 
 /// Detector 5: Commit touches many files but few have receipt coverage.
-fn detect_batch_commits(
-    entries: &[audit::AuditEntry],
-    receipts: &[&Receipt],
-) -> Vec<AnomalyFlag> {
+fn detect_batch_commits(entries: &[audit::AuditEntry], receipts: &[&Receipt]) -> Vec<AnomalyFlag> {
     let mut flags = Vec::new();
     let _ = receipts; // receipts available if needed in future
 
@@ -478,10 +494,7 @@ fn detect_unusual_session_patterns(
 }
 
 /// Detector 7: Suspiciously long gaps between consecutive prompts during the hackathon.
-fn detect_time_gaps(
-    timeline: &[TimelineEntry],
-    start: DateTime<Utc>,
-) -> Vec<AnomalyFlag> {
+fn detect_time_gaps(timeline: &[TimelineEntry], start: DateTime<Utc>) -> Vec<AnomalyFlag> {
     let mut flags = Vec::new();
 
     let within: Vec<&TimelineEntry> = timeline.iter().filter(|t| t.within_window).collect();
@@ -605,12 +618,7 @@ fn build_file_attribution(receipts: &[&Receipt]) -> Vec<FileAttribution> {
 // Markdown section writers
 // ---------------------------------------------------------------------------
 
-fn write_header(
-    md: &mut String,
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-    author: Option<&str>,
-) {
+fn write_header(md: &mut String, start: DateTime<Utc>, end: DateTime<Utc>, author: Option<&str>) {
     let _ = writeln!(md, "# Hackathon Fairness Report");
     let _ = writeln!(
         md,
@@ -667,16 +675,11 @@ fn write_summary(
     let _ = writeln!(md, "| Total AI prompts | {} |", timeline.len());
     let _ = writeln!(md, "| Prompts within window | {} |", within_count);
     if outside_count > 0 {
-        let _ = writeln!(
-            md,
-            "| Prompts outside window | **{}** |",
-            outside_count
-        );
+        let _ = writeln!(md, "| Prompts outside window | **{}** |", outside_count);
     }
     let _ = writeln!(md, "| AI-generated lines | {} |", total_ai_lines);
     if total_accepted + total_overridden > 0 {
-        let rate =
-            total_accepted as f64 / (total_accepted + total_overridden) as f64 * 100.0;
+        let rate = total_accepted as f64 / (total_accepted + total_overridden) as f64 * 100.0;
         let _ = writeln!(
             md,
             "| Acceptance rate | {:.0}% ({} accepted, {} overridden) |",
@@ -730,11 +733,7 @@ fn write_timeline(md: &mut String, timeline: &[TimelineEntry]) {
     );
 
     for (i, entry) in timeline.iter().enumerate() {
-        let window = if entry.within_window {
-            "Yes"
-        } else {
-            "**NO**"
-        };
+        let window = if entry.within_window { "Yes" } else { "**NO**" };
         let duration = entry
             .duration_secs
             .map(session_stats::format_duration)
@@ -777,8 +776,7 @@ fn write_code_attribution(
     let _ = writeln!(md, "### Overall\n");
     let _ = writeln!(md, "- **AI-generated lines**: {}", total_ai);
     if total_accepted + total_overridden > 0 {
-        let rate =
-            total_accepted as f64 / (total_accepted + total_overridden) as f64 * 100.0;
+        let rate = total_accepted as f64 / (total_accepted + total_overridden) as f64 * 100.0;
         let _ = writeln!(
             md,
             "- **Accepted unchanged**: {} ({:.0}%)",
@@ -859,11 +857,7 @@ fn write_anomaly_flags(md: &mut String, anomalies: &[AnomalyFlag]) {
     }
 }
 
-fn write_integrity_assessment(
-    md: &mut String,
-    anomalies: &[AnomalyFlag],
-    score: u32,
-) {
+fn write_integrity_assessment(md: &mut String, anomalies: &[AnomalyFlag], score: u32) {
     let _ = writeln!(md, "## 5. Integrity Assessment\n");
     let _ = writeln!(md, "### Score Breakdown\n");
     let _ = writeln!(md, "| Factor | Count | Deduction |");
@@ -983,9 +977,8 @@ fn make_rel(path: &str) -> String {
 
 fn is_source_file(path: &str) -> bool {
     let extensions = [
-        ".rs", ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".java", ".c", ".cpp", ".h",
-        ".hpp", ".rb", ".swift", ".kt", ".cs", ".php", ".scala", ".ex", ".exs", ".zig",
-        ".vue", ".svelte",
+        ".rs", ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".java", ".c", ".cpp", ".h", ".hpp",
+        ".rb", ".swift", ".kt", ".cs", ".php", ".scala", ".ex", ".exs", ".zig", ".vue", ".svelte",
     ];
     extensions.iter().any(|ext| path.ends_with(ext))
 }

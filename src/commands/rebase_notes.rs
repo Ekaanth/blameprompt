@@ -40,7 +40,13 @@ pub fn remap(old_sha: &str, new_sha: &str) {
 
     // Remove the old note now that we've copied it to the new SHA
     let _ = Command::new("git")
-        .args(["notes", "--ref", "refs/notes/blameprompt", "remove", old_sha])
+        .args([
+            "notes",
+            "--ref",
+            "refs/notes/blameprompt",
+            "remove",
+            old_sha,
+        ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
@@ -163,8 +169,8 @@ fn get_diff_between_commits(old_sha: &str, new_sha: &str) -> Option<String> {
 fn write_note(sha: &str, payload: &NotePayload) -> Result<(), String> {
     use std::io::Write;
 
-    let json = serde_json::to_string_pretty(payload)
-        .map_err(|e| format!("Serialize error: {}", e))?;
+    let json =
+        serde_json::to_string_pretty(payload).map_err(|e| format!("Serialize error: {}", e))?;
 
     let mut child = Command::new("git")
         .args([
@@ -210,7 +216,8 @@ mod tests {
 
     #[test]
     fn test_build_offset_table_additions() {
-        let diff = "+++ b/src/main.rs\n@@ -10,2 +10,5 @@ fn foo() {\n+    line1\n+    line2\n+    line3\n";
+        let diff =
+            "+++ b/src/main.rs\n@@ -10,2 +10,5 @@ fn foo() {\n+    line1\n+    line2\n+    line3\n";
         let table = build_offset_table(diff);
         assert!(table.contains_key("src/main.rs"));
         let offsets = &table["src/main.rs"];

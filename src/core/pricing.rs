@@ -90,19 +90,13 @@ fn get_rates(model_lower: &str) -> (f64, f64) {
     // ── Google (Gemini) ─────────────────────────────────────────────────
     else if model_lower.contains("gemini-2.5-pro") || model_lower.contains("gemini-2-5-pro") {
         (1.25, 10.00) // $1.25/M input (<200k), $10/M output
-    } else if model_lower.contains("gemini-2.5-flash")
-        || model_lower.contains("gemini-2-5-flash")
-    {
+    } else if model_lower.contains("gemini-2.5-flash") || model_lower.contains("gemini-2-5-flash") {
         (0.15, 0.60)
-    } else if model_lower.contains("gemini-2.0-flash")
-        || model_lower.contains("gemini-2-0-flash")
-    {
+    } else if model_lower.contains("gemini-2.0-flash") || model_lower.contains("gemini-2-0-flash") {
         (0.10, 0.40)
     } else if model_lower.contains("gemini-1.5-pro") || model_lower.contains("gemini-1-5-pro") {
         (1.25, 5.00)
-    } else if model_lower.contains("gemini-1.5-flash")
-        || model_lower.contains("gemini-1-5-flash")
-    {
+    } else if model_lower.contains("gemini-1.5-flash") || model_lower.contains("gemini-1-5-flash") {
         (0.075, 0.30)
     } else if model_lower.contains("gemini") {
         // Generic Gemini — default to Flash pricing

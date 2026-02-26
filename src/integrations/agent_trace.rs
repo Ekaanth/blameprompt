@@ -88,7 +88,10 @@ pub fn to_agent_trace(receipts: &[Receipt], commit_sha: &str) -> TraceRecord {
 
     let files: Vec<TracedFile> = file_map
         .into_iter()
-        .map(|(path, conversations)| TracedFile { path, conversations })
+        .map(|(path, conversations)| TracedFile {
+            path,
+            conversations,
+        })
         .collect();
 
     TraceRecord {
@@ -130,8 +133,8 @@ fn normalize_model_id(provider: &str, model: &str) -> String {
 pub fn write_to_git_notes(sha: &str, record: &TraceRecord) -> Result<(), String> {
     use std::io::Write;
 
-    let json = serde_json::to_string_pretty(record)
-        .map_err(|e| format!("Serialize error: {}", e))?;
+    let json =
+        serde_json::to_string_pretty(record).map_err(|e| format!("Serialize error: {}", e))?;
 
     let mut child = Command::new("git")
         .args([
@@ -185,7 +188,10 @@ pub fn run_export(commit_ref: Option<&str>) {
     let payload = match read_receipts_for_commit(&sha) {
         Some(p) => p,
         None => {
-            eprintln!("[agent-trace] No blameprompt note found for {}", util::short_sha(&sha));
+            eprintln!(
+                "[agent-trace] No blameprompt note found for {}",
+                util::short_sha(&sha)
+            );
             return;
         }
     };
@@ -257,15 +263,30 @@ mod tests {
 
     #[test]
     fn test_normalize_model_id() {
-        assert_eq!(normalize_model_id("claude", "claude-sonnet-4-6"), "anthropic/claude-sonnet-4-6");
+        assert_eq!(
+            normalize_model_id("claude", "claude-sonnet-4-6"),
+            "anthropic/claude-sonnet-4-6"
+        );
         assert_eq!(normalize_model_id("openai", "gpt-4o"), "openai/gpt-4o");
-        assert_eq!(normalize_model_id("cursor", "claude-3-5-sonnet"), "cursor/claude-3-5-sonnet");
+        assert_eq!(
+            normalize_model_id("cursor", "claude-3-5-sonnet"),
+            "cursor/claude-3-5-sonnet"
+        );
         assert_eq!(normalize_model_id("codex", "gpt-4.1"), "openai/gpt-4.1");
-        assert_eq!(normalize_model_id("gemini", "gemini-2.5-pro"), "google/gemini-2.5-pro");
-        assert_eq!(normalize_model_id("windsurf", "claude-3-5-sonnet"), "codeium/claude-3-5-sonnet");
+        assert_eq!(
+            normalize_model_id("gemini", "gemini-2.5-pro"),
+            "google/gemini-2.5-pro"
+        );
+        assert_eq!(
+            normalize_model_id("windsurf", "claude-3-5-sonnet"),
+            "codeium/claude-3-5-sonnet"
+        );
         assert_eq!(normalize_model_id("copilot", "gpt-4o"), "github/gpt-4o");
         // Already namespaced — pass through
-        assert_eq!(normalize_model_id("anthropic", "anthropic/claude-3"), "anthropic/claude-3");
+        assert_eq!(
+            normalize_model_id("anthropic", "anthropic/claude-3"),
+            "anthropic/claude-3"
+        );
     }
 
     #[test]

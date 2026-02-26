@@ -153,7 +153,9 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                             if !ask_question_ids.contains(tuid) {
                                 return None;
                             }
-                            item.get("content").map(extract_tool_result_text).filter(|s| !s.is_empty())
+                            item.get("content")
+                                .map(extract_tool_result_text)
+                                .filter(|s| !s.is_empty())
                         })
                         .collect();
                     if !answers.is_empty() {
@@ -182,8 +184,10 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
 
                 // Extract model from this assistant message (always update — last seen wins,
                 // so model switches during a session are reflected in the global fallback).
-                let entry_model: Option<String> =
-                    msg.and_then(|m| m.get("model")).and_then(|v| v.as_str()).map(String::from);
+                let entry_model: Option<String> = msg
+                    .and_then(|m| m.get("model"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
                 if entry_model.is_some() {
                     model = entry_model.clone();
                 }
@@ -193,10 +197,22 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                 // Store per-entry usage so we can attribute costs to individual prompts later.
                 let mut entry_usage: Option<TokenUsage> = None;
                 if let Some(usage) = msg.and_then(|m| m.get("usage")) {
-                    let it = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let ot = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let cr = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let cc = usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let it = usage
+                        .get("input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let ot = usage
+                        .get("output_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let cr = usage
+                        .get("cache_read_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let cc = usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
                     if it > 0 || ot > 0 {
                         entry_usage = Some(TokenUsage {
                             input_tokens: it,
@@ -567,9 +583,7 @@ pub fn extract_conversation_turns(
                             }
                         } else if let Some(edits) = input.get("edits").and_then(|e| e.as_array()) {
                             for edit in edits {
-                                if let Some(fp) =
-                                    edit.get("file_path").and_then(|v| v.as_str())
-                                {
+                                if let Some(fp) = edit.get("file_path").and_then(|v| v.as_str()) {
                                     let display_path =
                                         fp.rsplit('/').next().unwrap_or(fp).to_string();
                                     if !all_files.contains(&display_path) {
@@ -735,7 +749,11 @@ pub fn token_usage_for_prompt(transcript: &Transcript, prompt_number: u32) -> Op
             found = true;
         }
     }
-    if found { Some(total) } else { None }
+    if found {
+        Some(total)
+    } else {
+        None
+    }
 }
 
 pub fn extract_agents_for_prompt(transcript: &Transcript, prompt_number: u32) -> Vec<String> {
@@ -927,11 +945,17 @@ fn prompt_message_slice(messages: &[Message], prompt_number: u32) -> &[Message] 
 
 /// Return the timestamp of the Nth user prompt (1-indexed) from the JSONL.
 /// Returns None if the prompt number is out of range.
-pub fn timestamp_for_prompt(result: &TranscriptParseResult, prompt_number: u32) -> Option<DateTime<Utc>> {
+pub fn timestamp_for_prompt(
+    result: &TranscriptParseResult,
+    prompt_number: u32,
+) -> Option<DateTime<Utc>> {
     if prompt_number == 0 {
         return None;
     }
-    result.user_prompt_timestamps.get((prompt_number - 1) as usize).copied()
+    result
+        .user_prompt_timestamps
+        .get((prompt_number - 1) as usize)
+        .copied()
 }
 
 /// Return the model used for the Nth user prompt (1-indexed).
@@ -1069,13 +1093,17 @@ mod tests {
         // prompt 2 → assistant replies with opus
         let transcript = Transcript {
             messages: vec![
-                Message::User { text: "first prompt".to_string() },
+                Message::User {
+                    text: "first prompt".to_string(),
+                },
                 Message::Assistant {
                     text: "response 1".to_string(),
                     model: Some("claude-sonnet-4-6".to_string()),
                     usage: None,
                 },
-                Message::User { text: "second prompt".to_string() },
+                Message::User {
+                    text: "second prompt".to_string(),
+                },
                 Message::Assistant {
                     text: "response 2".to_string(),
                     model: Some("claude-opus-4-6".to_string()),
@@ -1102,7 +1130,9 @@ mod tests {
     fn test_token_usage_for_prompt() {
         let transcript = Transcript {
             messages: vec![
-                Message::User { text: "first prompt".to_string() },
+                Message::User {
+                    text: "first prompt".to_string(),
+                },
                 Message::Assistant {
                     text: "response 1".to_string(),
                     model: None,
@@ -1113,7 +1143,9 @@ mod tests {
                         cache_creation_tokens: 50,
                     }),
                 },
-                Message::User { text: "second prompt".to_string() },
+                Message::User {
+                    text: "second prompt".to_string(),
+                },
                 Message::Assistant {
                     text: "response 2a".to_string(),
                     model: None,
@@ -1202,18 +1234,30 @@ mod tests {
         );
 
         // The [choice] answer IS present in messages
-        let choice_msg = result.transcript.messages.iter().find(|m| {
-            matches!(m, Message::User { text, .. } if text.starts_with("[choice]"))
-        });
-        assert!(choice_msg.is_some(), "AskUserQuestion answer should be stored");
+        let choice_msg = result
+            .transcript
+            .messages
+            .iter()
+            .find(|m| matches!(m, Message::User { text, .. } if text.starts_with("[choice]")));
+        assert!(
+            choice_msg.is_some(),
+            "AskUserQuestion answer should be stored"
+        );
         if let Some(Message::User { text, .. }) = choice_msg {
-            assert!(text.contains("CSS variables"), "Answer text should be captured: {}", text);
+            assert!(
+                text.contains("CSS variables"),
+                "Answer text should be captured: {}",
+                text
+            );
         }
 
         // The choice should appear as a "choice" role in conversation turns
         let turns = extract_conversation_turns(&result.transcript, 1000, &|s| s.to_string());
         let choice_turn = turns.iter().find(|t| t.role == "choice");
-        assert!(choice_turn.is_some(), "choice turn should appear in conversation");
+        assert!(
+            choice_turn.is_some(),
+            "choice turn should appear in conversation"
+        );
         assert!(choice_turn.unwrap().content.contains("CSS variables"));
     }
 
@@ -1253,10 +1297,7 @@ mod tests {
         assert_eq!(decisions[0].options.len(), 2);
         assert!(decisions[0].options[0].selected); // CSS variables
         assert!(!decisions[0].options[1].selected); // Theme context
-        assert_eq!(
-            decisions[0].answer,
-            Some("CSS variables".to_string())
-        );
+        assert_eq!(decisions[0].answer, Some("CSS variables".to_string()));
         assert!(!decisions[0].multi_select);
     }
 

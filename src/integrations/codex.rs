@@ -101,7 +101,10 @@ fn collect_session_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) {
         let path = entry.path();
         if path.is_dir() {
             collect_session_files_recursive(&path, files);
-        } else if path.extension().is_some_and(|e| e == "jsonl" || e == "json") {
+        } else if path
+            .extension()
+            .is_some_and(|e| e == "jsonl" || e == "json")
+        {
             files.push(path);
         }
     }
@@ -191,14 +194,9 @@ pub fn parse_codex_session(path: &Path) -> Option<CodexSession> {
                         model = m.to_string();
                     }
                 }
-                let role = entry
-                    .get("role")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let role = entry.get("role").and_then(|v| v.as_str()).unwrap_or("");
                 let text = extract_codex_content(&entry);
-                if !text.is_empty()
-                    && (role == "user" || role == "assistant" || role == "system")
-                {
+                if !text.is_empty() && (role == "user" || role == "assistant" || role == "system") {
                     messages.push(CodexMessage {
                         role: role.to_string(),
                         text,
@@ -336,10 +334,7 @@ fn extract_codex_tool_calls(
         "web_search_call",
     ] {
         if let Some(call) = entry.get(*key) {
-            let tool_name = call
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(*key);
+            let tool_name = call.get("name").and_then(|v| v.as_str()).unwrap_or(*key);
             if !tools.contains(&tool_name.to_string()) {
                 tools.push(tool_name.to_string());
             }
@@ -405,7 +400,10 @@ pub fn install_hooks() -> Result<(), String> {
 
     // Check if already installed
     if content.contains("blameprompt") {
-        println!("  BlamePrompt hooks already installed in {}", config_path.display());
+        println!(
+            "  BlamePrompt hooks already installed in {}",
+            config_path.display()
+        );
         return Ok(());
     }
 
@@ -583,10 +581,7 @@ pub fn run_record_codex(session_path: Option<&str>) {
     if count == 0 {
         eprintln!("[codex] No valid sessions found in the provided file(s).");
     } else {
-        println!(
-            "[codex] Recorded {} Codex CLI session(s)",
-            count
-        );
+        println!("[codex] Recorded {} Codex CLI session(s)", count);
         println!("  Receipts staged. They will be attached on next git commit.");
     }
 }

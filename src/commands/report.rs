@@ -393,10 +393,8 @@ fn write_time_analysis(md: &mut String, receipts: &[&Receipt]) {
     // Use wall-clock time (merged intervals) when available.
     // Fallback priority: per-prompt durations sum > raw session sum.
     // Never use the raw session sum alone — it double-counts parallel sub-agent sessions.
-    let total_prompt_duration_secs: u64 = receipts
-        .iter()
-        .filter_map(|r| r.prompt_duration_secs)
-        .sum();
+    let total_prompt_duration_secs: u64 =
+        receipts.iter().filter_map(|r| r.prompt_duration_secs).sum();
     let effective_duration = if stats.wall_clock_secs > 0 {
         stats.wall_clock_secs
     } else if total_prompt_duration_secs > 0 {
@@ -707,10 +705,22 @@ fn write_session_analysis(md: &mut String, receipts: &[&Receipt]) {
     writeln!(md, "| Sessions modifying 1 file | {} |", single_file).ok();
     writeln!(md, "| Sessions modifying 2+ files | {} |", multi_file).ok();
 
-    let continuation_count = receipts.iter().filter(|r| r.is_continuation == Some(true)).count();
+    let continuation_count = receipts
+        .iter()
+        .filter(|r| r.is_continuation == Some(true))
+        .count();
     if continuation_count > 0 {
-        writeln!(md, "| Sessions that are continuations | {} |", continuation_count).ok();
-        let max_depth = receipts.iter().filter_map(|r| r.continuation_depth).max().unwrap_or(0);
+        writeln!(
+            md,
+            "| Sessions that are continuations | {} |",
+            continuation_count
+        )
+        .ok();
+        let max_depth = receipts
+            .iter()
+            .filter_map(|r| r.continuation_depth)
+            .max()
+            .unwrap_or(0);
         writeln!(md, "| Longest continuation chain | {} hops |", max_depth).ok();
     }
 
@@ -836,7 +846,12 @@ fn write_prompt_details(md: &mut String, entries: &[audit::AuditEntry]) {
                     } else {
                         format!(" (tools: {})", a.tools_used.join(", "))
                     };
-                    writeln!(md, "- [{}] \"{}\" -- {}{}", agent_type, desc, a.status, tools).ok();
+                    writeln!(
+                        md,
+                        "- [{}] \"{}\" -- {}{}",
+                        agent_type, desc, a.status, tools
+                    )
+                    .ok();
                 }
                 writeln!(md).ok();
             }
@@ -906,7 +921,11 @@ fn write_prompt_details(md: &mut String, entries: &[audit::AuditEntry]) {
             // Show accepted/overridden stats when available (computed at Attach time)
             if let (Some(accepted), Some(overridden)) = (r.accepted_lines, r.overridden_lines) {
                 let total = accepted + overridden;
-                let accept_pct = if total > 0 { (accepted as f64 / total as f64) * 100.0 } else { 100.0 };
+                let accept_pct = if total > 0 {
+                    (accepted as f64 / total as f64) * 100.0
+                } else {
+                    100.0
+                };
                 writeln!(
                     md,
                     "- Acceptance rate: {:.0}% ({} accepted, {} overridden by human)",

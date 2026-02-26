@@ -1,5 +1,6 @@
 use crate::core::receipt::Receipt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -126,14 +127,16 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
         let keep_input_tokens = receipt.input_tokens.or(existing.input_tokens);
         let keep_output_tokens = receipt.output_tokens.or(existing.output_tokens);
         let keep_cache_read = receipt.cache_read_tokens.or(existing.cache_read_tokens);
-        let keep_cache_creation = receipt.cache_creation_tokens.or(existing.cache_creation_tokens);
+        let keep_cache_creation = receipt
+            .cache_creation_tokens
+            .or(existing.cache_creation_tokens);
         let keep_session_end = receipt.session_end.or(existing.session_end);
         // Preserve prompt_submitted_at: set once at UserPromptSubmit, never overwritten.
-        let keep_prompt_submitted_at = existing
-            .prompt_submitted_at
-            .or(receipt.prompt_submitted_at);
+        let keep_prompt_submitted_at = existing.prompt_submitted_at.or(receipt.prompt_submitted_at);
         // Preserve prompt_duration_secs: set at Stop, keep if already computed.
-        let keep_prompt_duration_secs = receipt.prompt_duration_secs.or(existing.prompt_duration_secs);
+        let keep_prompt_duration_secs = receipt
+            .prompt_duration_secs
+            .or(existing.prompt_duration_secs);
         // Preserve diff totals: use the incoming value unless it is zero, in which case
         // keep whatever was previously recorded (e.g. from PostToolUse).
         let keep_total_additions = if receipt.total_additions > 0 {
@@ -163,7 +166,10 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
             let mut merged = existing.subagent_activities.clone();
             for incoming in &receipt.subagent_activities {
                 if let Some(ref aid) = incoming.agent_id {
-                    if let Some(pos) = merged.iter().position(|a| a.agent_id.as_deref() == Some(aid)) {
+                    if let Some(pos) = merged
+                        .iter()
+                        .position(|a| a.agent_id.as_deref() == Some(aid))
+                    {
                         merged[pos] = incoming.clone();
                     } else {
                         merged.push(incoming.clone());
@@ -175,7 +181,10 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
             merged
         };
         // Preserve concurrent_tool_calls: take the max.
-        let keep_concurrent_tool_calls = match (existing.concurrent_tool_calls, receipt.concurrent_tool_calls) {
+        let keep_concurrent_tool_calls = match (
+            existing.concurrent_tool_calls,
+            receipt.concurrent_tool_calls,
+        ) {
             (Some(a), Some(b)) => Some(a.max(b)),
             (a, b) => a.or(b),
         };
@@ -296,6 +305,65 @@ pub fn clear_staging() {
     if let Ok(json) = serde_json::to_string_pretty(&data) {
         let _ = std::fs::write(&path, json);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Committed prompt tracking
+// ---------------------------------------------------------------------------
+// After `blameprompt attach` writes receipts to git notes and clears staging,
+// we record the max committed prompt number per session so the backfill loop
+// in handle_stop() knows not to recreate receipts for already-committed prompts.
+
+/// Maps session_id → max committed prompt number.
+type CommittedState = HashMap<String, u32>;
+
+fn committed_path_in(base: &Path) -> PathBuf {
+    staging_dir_in(base).join("committed.json")
+}
+
+fn read_committed_state(base: &Path) -> CommittedState {
+    let path = committed_path_in(base);
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => HashMap::new(),
+    }
+}
+
+fn write_committed_state(base: &Path, state: &CommittedState) {
+    ensure_staging_dir_in(base);
+    let path = committed_path_in(base);
+    if let Ok(json) = serde_json::to_string_pretty(state) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+/// Record the max committed prompt number for each session in the given receipts.
+/// Called by `blameprompt attach` right before clearing staging.
+pub fn record_committed_prompts(receipts: &[Receipt]) {
+    record_committed_prompts_in(receipts, Path::new("."));
+}
+
+pub fn record_committed_prompts_in(receipts: &[Receipt], base: &Path) {
+    if receipts.is_empty() {
+        return;
+    }
+    let mut state = read_committed_state(base);
+    for r in receipts {
+        if let Some(pn) = r.prompt_number {
+            let entry = state.entry(r.session_id.clone()).or_insert(0);
+            if pn > *entry {
+                *entry = pn;
+            }
+        }
+    }
+    write_committed_state(base, &state);
+}
+
+/// Returns the max prompt number already committed for the given session, or 0 if none.
+pub fn committed_max_prompt(session_id: &str, base_dir: &str) -> u32 {
+    let base = Path::new(base_dir);
+    let state = read_committed_state(base);
+    state.get(session_id).copied().unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -499,8 +567,14 @@ mod tests {
         let receipt = &data.receipts[0];
         assert_eq!(receipt.subagent_activities.len(), 2);
         assert_eq!(receipt.subagent_activities[0].status, "completed");
-        assert_eq!(receipt.subagent_activities[0].tools_used, vec!["Glob", "Read"]);
-        assert_eq!(receipt.subagent_activities[1].agent_id, Some("a2".to_string()));
+        assert_eq!(
+            receipt.subagent_activities[0].tools_used,
+            vec!["Glob", "Read"]
+        );
+        assert_eq!(
+            receipt.subagent_activities[1].agent_id,
+            Some("a2".to_string())
+        );
     }
 
     #[test]

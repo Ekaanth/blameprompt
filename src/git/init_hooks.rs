@@ -1,5 +1,6 @@
 use crate::{
-    git::hooks, git::wrap,
+    git::hooks,
+    git::wrap,
     integrations::{claude_hooks, codex, copilot, cursor, gemini, windsurf},
 };
 use std::path::Path;

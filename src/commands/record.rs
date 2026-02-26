@@ -151,4 +151,3 @@ pub fn run(session_path: &str, provider: Option<&str>) {
     println!("  Est. cost: ${:.4}", cost);
     println!("\nReceipts added to staging. They will be attached on next commit.");
 }
-

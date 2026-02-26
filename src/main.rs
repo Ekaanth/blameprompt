@@ -329,8 +329,7 @@ fn count_accepted_overridden(staging_blob: &str, head_blob: &str) -> (u32, u32) 
     let staging_lines = get_blob_lines(staging_blob);
     let head_lines = get_blob_lines(head_blob);
 
-    let head_set: std::collections::HashSet<&str> =
-        head_lines.iter().map(|s| s.as_str()).collect();
+    let head_set: std::collections::HashSet<&str> = head_lines.iter().map(|s| s.as_str()).collect();
 
     let mut accepted = 0u32;
     let mut overridden = 0u32;
@@ -484,42 +483,28 @@ fn main() {
             commands::diff::run(commit.as_deref());
         }
 
-        Commands::InstallGitWrap => {
-            match git::wrap::install() {
-                Ok(path) => {
-                    let home = dirs::home_dir()
-                        .map(|h| h.display().to_string())
-                        .unwrap_or_else(|| "~".to_string());
-                    println!();
-                    println!(
-                        "  \x1b[1;32m[done]\x1b[0m Git wrapper installed"
-                    );
-                    println!(
-                        "         \x1b[2m→ {}\x1b[0m",
-                        path.display()
-                    );
-                    println!(
-                        "  \x1b[1;32m[done]\x1b[0m PATH export added to shell RC"
-                    );
-                    println!(
-                        "         \x1b[2m→ {}/.blameprompt/bin:$PATH\x1b[0m",
-                        home
-                    );
-                    println!();
-                    println!(
-                        "\x1b[1mReload your shell to activate:\x1b[0m  \x1b[36msource ~/.zshrc\x1b[0m"
-                    );
-                    println!(
-                        "Every \x1b[36mgit commit\x1b[0m will now auto-attach AI receipts."
-                    );
-                    println!();
-                }
-                Err(e) => {
-                    eprintln!("Error installing git wrapper: {}", e);
-                    std::process::exit(1);
-                }
+        Commands::InstallGitWrap => match git::wrap::install() {
+            Ok(path) => {
+                let home = dirs::home_dir()
+                    .map(|h| h.display().to_string())
+                    .unwrap_or_else(|| "~".to_string());
+                println!();
+                println!("  \x1b[1;32m[done]\x1b[0m Git wrapper installed");
+                println!("         \x1b[2m→ {}\x1b[0m", path.display());
+                println!("  \x1b[1;32m[done]\x1b[0m PATH export added to shell RC");
+                println!("         \x1b[2m→ {}/.blameprompt/bin:$PATH\x1b[0m", home);
+                println!();
+                println!(
+                    "\x1b[1mReload your shell to activate:\x1b[0m  \x1b[36msource ~/.zshrc\x1b[0m"
+                );
+                println!("Every \x1b[36mgit commit\x1b[0m will now auto-attach AI receipts.");
+                println!();
             }
-        }
+            Err(e) => {
+                eprintln!("Error installing git wrapper: {}", e);
+                std::process::exit(1);
+            }
+        },
 
         Commands::RebaseNotes => {
             commands::rebase_notes::run_from_stdin();
@@ -616,8 +601,7 @@ fn main() {
         } => {
             // Default: 24h window ending now
             let default_end = chrono::Utc::now().to_rfc3339();
-            let default_start =
-                (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+            let default_start = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
             let start_str = start.as_deref().unwrap_or(&default_start);
             let end_str = end.as_deref().unwrap_or(&default_end);
 
@@ -646,6 +630,9 @@ fn main() {
             compute_acceptance_stats(&mut data.receipts);
             match git::notes::attach_receipts_to_head(&data) {
                 Ok(()) => {
+                    // Record which prompts are being committed so the backfill loop
+                    // in handle_stop() won't recreate them after staging is cleared.
+                    commands::staging::record_committed_prompts(&data.receipts);
                     commands::staging::clear_staging();
                     let head_short = std::process::Command::new("git")
                         .args(["rev-parse", "--short", "HEAD"])

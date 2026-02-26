@@ -114,7 +114,10 @@ fn print_annotated_diff(diff: &str, receipts: &[Receipt]) {
             println!("{}{}{}", BOLD_CYAN, line, RESET);
         } else if line.starts_with("--- ") || line.starts_with("+++ ") {
             println!("{}{}{}", BOLD_CYAN, line, RESET);
-        } else if line.starts_with("index ") || line.starts_with("new file") || line.starts_with("deleted file") {
+        } else if line.starts_with("index ")
+            || line.starts_with("new file")
+            || line.starts_with("deleted file")
+        {
             println!("{}{}{}", DIM, line, RESET);
         } else if line.starts_with("@@ ") {
             let annotation = if let Some(ref file) = current_file {
@@ -126,7 +129,10 @@ fn print_annotated_diff(diff: &str, receipts: &[Receipt]) {
 
             if annotation.is_empty() {
                 // Human-written hunk
-                println!("{}{}{}  {}[\u{1f465} Human]{}", CYAN, line, RESET, DIM, RESET);
+                println!(
+                    "{}{}{}  {}[\u{1f465} Human]{}",
+                    CYAN, line, RESET, DIM, RESET
+                );
             } else {
                 println!("{}{}{}  {}", CYAN, line, RESET, annotation);
             }
@@ -153,12 +159,7 @@ fn print_plain_diff(diff: &str) {
 }
 
 /// Find the best AI attribution for a hunk in the given file.
-fn get_hunk_annotation(
-    file: &str,
-    hunk_start: u32,
-    hunk_end: u32,
-    receipts: &[Receipt],
-) -> String {
+fn get_hunk_annotation(file: &str, hunk_start: u32, hunk_end: u32, receipts: &[Receipt]) -> String {
     for receipt in receipts {
         for fc in receipt.all_file_changes() {
             if util::paths_match(file, &fc.path)
@@ -176,7 +177,6 @@ fn get_hunk_annotation(
     }
     String::new()
 }
-
 
 /// Shorten a model name for display (e.g. "claude-sonnet-4-6" → "sonnet-4.6").
 fn shorten_model(model: &str) -> String {

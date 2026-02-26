@@ -202,10 +202,7 @@ pub fn run(commit: &str, format: &str) {
                 } else {
                     format!(" (tools: {})", a.tools_used.join(", "))
                 };
-                println!(
-                    "  [{}] \"{}\" -- {}{}",
-                    agent_type, desc, a.status, tools
-                );
+                println!("  [{}] \"{}\" -- {}{}", agent_type, desc, a.status, tools);
             }
             if let Some(max_concurrent) = r.concurrent_tool_calls {
                 println!("  Max concurrent tool calls: {}", max_concurrent);

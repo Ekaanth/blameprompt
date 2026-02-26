@@ -26,7 +26,7 @@ pub struct CursorChatSession {
 
 #[derive(Debug)]
 pub struct CursorMessage {
-    pub role: String,  // "user" or "assistant"
+    pub role: String, // "user" or "assistant"
     pub text: String,
     #[allow(dead_code)]
     pub timestamp: Option<DateTime<Utc>>,
@@ -95,7 +95,9 @@ impl CursorChatEntry {
         self.timestamp.map(|ms| {
             if ms > 1_000_000_000_000 {
                 // Milliseconds
-                Utc.timestamp_millis_opt(ms).single().unwrap_or_else(Utc::now)
+                Utc.timestamp_millis_opt(ms)
+                    .single()
+                    .unwrap_or_else(Utc::now)
             } else {
                 // Seconds
                 Utc.timestamp_opt(ms, 0).single().unwrap_or_else(Utc::now)
@@ -194,12 +196,11 @@ fn read_from_cursor_disk_kv(conn: &Connection) -> Vec<CursorChatSession> {
     let mut found_keys: Vec<String> = Vec::new();
 
     // Query for composerData keys
-    let mut stmt = match conn.prepare(
-        "SELECT value FROM cursorDiskKV WHERE key LIKE 'composerData:%'",
-    ) {
-        Ok(s) => s,
-        Err(_) => return sessions,
-    };
+    let mut stmt =
+        match conn.prepare("SELECT value FROM cursorDiskKV WHERE key LIKE 'composerData:%'") {
+            Ok(s) => s,
+            Err(_) => return sessions,
+        };
     let rows = stmt.query_map([], |r| r.get::<_, String>(0));
     if let Ok(rows) = rows {
         for row in rows.flatten() {
@@ -243,11 +244,11 @@ fn read_from_item_table(conn: &Connection) -> Vec<CursorChatSession> {
     let mut found_keys: Vec<String> = Vec::new();
 
     for &key in known_key_patterns {
-        if let Ok(value) = conn.query_row(
-            "SELECT value FROM ItemTable WHERE key = ?1",
-            [key],
-            |r| r.get::<_, String>(0),
-        ) {
+        if let Ok(value) =
+            conn.query_row("SELECT value FROM ItemTable WHERE key = ?1", [key], |r| {
+                r.get::<_, String>(0)
+            })
+        {
             found_keys.push(value);
         }
     }
@@ -404,7 +405,10 @@ pub fn run_record_cursor(workspace: Option<&str>) {
 
     let sessions = read_chat_sessions(&db_path);
     if sessions.is_empty() {
-        eprintln!("[cursor] No AI chat sessions found in {}", db_path.display());
+        eprintln!(
+            "[cursor] No AI chat sessions found in {}",
+            db_path.display()
+        );
         eprintln!("  Make sure you have used Cursor's AI features in this workspace.");
         return;
     }
@@ -433,8 +437,7 @@ pub fn run_record_cursor(workspace: Option<&str>) {
             })
             .unwrap_or_else(|| session.title.clone());
 
-        let prompt_summary =
-            crate::core::redact::redact_secrets_with_config(&first_user_msg, &cfg);
+        let prompt_summary = crate::core::redact::redact_secrets_with_config(&first_user_msg, &cfg);
 
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
@@ -596,10 +599,7 @@ pub fn install_hooks() -> Result<(), String> {
     std::fs::write(&hook_path, json_str)
         .map_err(|e| format!("Cannot write {}: {}", hook_path.display(), e))?;
 
-    println!(
-        "  Installed BlamePrompt hooks in {}",
-        hook_path.display()
-    );
+    println!("  Installed BlamePrompt hooks in {}", hook_path.display());
     Ok(())
 }
 

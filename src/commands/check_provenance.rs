@@ -147,13 +147,17 @@ fn find_matching_receipt(
     hits: &[(String, u32, u32, String, String, String, String)],
     file: &str,
     line: u32,
-) -> (bool, Option<String>, Option<String>, Option<String>, Option<String>) {
+) -> (
+    bool,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
     for (path, start, end, model, provider, receipt_id, summary) in hits {
         // Match on file path (basename or full)
         let hit_norm = normalize_file_path(path);
-        let file_match = hit_norm == file
-            || path.ends_with(file)
-            || file.ends_with(path.as_str());
+        let file_match = hit_norm == file || path.ends_with(file) || file.ends_with(path.as_str());
 
         // If receipt has line range 1..1 treat as "whole file" (no range info)
         let range_match = (*start == 1 && *end <= 1) || (line >= *start && line <= *end);
@@ -214,10 +218,7 @@ fn print_ranges(file: &str, ranges: &[ProvenanceRange]) {
         .filter(|r| r.is_ai)
         .map(|r| r.end_line - r.start_line + 1)
         .sum();
-    let total_lines: u32 = ranges
-        .iter()
-        .map(|r| r.end_line - r.start_line + 1)
-        .sum();
+    let total_lines: u32 = ranges.iter().map(|r| r.end_line - r.start_line + 1).sum();
     let human_lines = total_lines.saturating_sub(ai_lines);
     let ai_pct = if total_lines > 0 {
         (ai_lines as f64 / total_lines as f64) * 100.0
@@ -333,7 +334,10 @@ mod tests {
         let input = "abc1234500000000000000000000000000000000 1 1 1\nauthor Alice\n\tlet x = 1;\n";
         let entries = parse_blame_porcelain(input);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].commit_sha, "abc1234500000000000000000000000000000000");
+        assert_eq!(
+            entries[0].commit_sha,
+            "abc1234500000000000000000000000000000000"
+        );
         assert_eq!(entries[0].line_number, 1);
         assert_eq!(entries[0].author, "Alice");
         assert_eq!(entries[0].content, "let x = 1;");

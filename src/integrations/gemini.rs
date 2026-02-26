@@ -71,10 +71,7 @@ pub fn list_session_files(sessions_dir: &Path) -> Vec<PathBuf> {
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension()
-                .is_some_and(|e| e == "jsonl" || e == "json")
-        })
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl" || e == "json"))
         .collect();
     files.sort_by_key(|f| {
         std::fs::metadata(f)
@@ -205,10 +202,7 @@ pub fn parse_gemini_session(path: &Path) -> Option<GeminiSession> {
 
         // Accept "gemini" as an alias for "model"/"assistant" (Gemini CLI uses this)
         if !text.is_empty()
-            && (role == "user"
-                || role == "model"
-                || role == "assistant"
-                || role == "gemini")
+            && (role == "user" || role == "model" || role == "assistant" || role == "gemini")
         {
             messages.push(GeminiMessage {
                 role: if role == "model" || role == "gemini" {
@@ -259,10 +253,7 @@ pub fn parse_gemini_session(path: &Path) -> Option<GeminiSession> {
         }
 
         // Extract token usage
-        if let Some(usage) = entry
-            .get("usageMetadata")
-            .or_else(|| entry.get("usage"))
-        {
+        if let Some(usage) = entry.get("usageMetadata").or_else(|| entry.get("usage")) {
             if let Some(it) = usage
                 .get("promptTokenCount")
                 .or_else(|| usage.get("input_tokens"))

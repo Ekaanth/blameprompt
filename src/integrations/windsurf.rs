@@ -115,9 +115,7 @@ impl WindsurfEntry {
                     .single()
                     .unwrap_or_else(Utc::now)
             } else {
-                Utc.timestamp_opt(ms, 0)
-                    .single()
-                    .unwrap_or_else(Utc::now)
+                Utc.timestamp_opt(ms, 0).single().unwrap_or_else(Utc::now)
             }
         })
     }
@@ -218,11 +216,11 @@ pub fn read_chat_sessions(db_path: &Path) -> Vec<WindsurfChatSession> {
     let mut found_keys: Vec<String> = Vec::new();
 
     for &key in known_key_patterns {
-        if let Ok(value) = conn.query_row(
-            "SELECT value FROM ItemTable WHERE key = ?1",
-            [key],
-            |r| r.get::<_, String>(0),
-        ) {
+        if let Ok(value) =
+            conn.query_row("SELECT value FROM ItemTable WHERE key = ?1", [key], |r| {
+                r.get::<_, String>(0)
+            })
+        {
             found_keys.push(value);
         }
     }
@@ -407,9 +405,7 @@ pub fn run_record_windsurf(workspace: Option<&str>) {
             Some(p) => p,
             None => {
                 eprintln!("[windsurf] Cannot find Windsurf workspace storage.");
-                eprintln!(
-                    "  Pass --workspace <path/to/state.vscdb> to specify the database."
-                );
+                eprintln!("  Pass --workspace <path/to/state.vscdb> to specify the database.");
                 std::process::exit(1);
             }
         }
@@ -452,8 +448,7 @@ pub fn run_record_windsurf(workspace: Option<&str>) {
             })
             .unwrap_or_else(|| session.title.clone());
 
-        let prompt_summary =
-            crate::core::redact::redact_secrets_with_config(&first_user_msg, &cfg);
+        let prompt_summary = crate::core::redact::redact_secrets_with_config(&first_user_msg, &cfg);
 
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
@@ -581,7 +576,9 @@ pub fn install_hooks() -> Result<(), String> {
     } else if home.join(".codeium").exists() {
         home.join(".codeium")
     } else {
-        return Err("Windsurf/Codeium not found (~/.windsurf/ or ~/.codeium/ does not exist)".to_string());
+        return Err(
+            "Windsurf/Codeium not found (~/.windsurf/ or ~/.codeium/ does not exist)".to_string(),
+        );
     };
 
     let hook_path = target_dir.join("hooks.json");
@@ -622,10 +619,7 @@ pub fn install_hooks() -> Result<(), String> {
     std::fs::write(&hook_path, json_str)
         .map_err(|e| format!("Cannot write {}: {}", hook_path.display(), e))?;
 
-    println!(
-        "  Installed BlamePrompt hooks in {}",
-        hook_path.display()
-    );
+    println!("  Installed BlamePrompt hooks in {}", hook_path.display());
     Ok(())
 }
 

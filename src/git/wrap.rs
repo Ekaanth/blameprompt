@@ -76,8 +76,7 @@ pub fn install() -> Result<PathBuf, String> {
     let binary = super::hooks::resolve_binary_path();
     let content = shim_content(&binary);
 
-    std::fs::write(&shim, &content)
-        .map_err(|e| format!("Cannot write git shim: {}", e))?;
+    std::fs::write(&shim, &content).map_err(|e| format!("Cannot write git shim: {}", e))?;
 
     #[cfg(unix)]
     {
@@ -97,8 +96,7 @@ pub fn install() -> Result<PathBuf, String> {
 pub fn uninstall() -> Result<(), String> {
     let shim = shim_path().ok_or("Cannot determine home directory")?;
     if shim.exists() {
-        std::fs::remove_file(&shim)
-            .map_err(|e| format!("Cannot remove git shim: {}", e))?;
+        std::fs::remove_file(&shim).map_err(|e| format!("Cannot remove git shim: {}", e))?;
     }
     Ok(())
 }
@@ -142,10 +140,22 @@ mod tests {
     fn test_shim_content_contains_key_logic() {
         let content = shim_content("/usr/local/bin/blameprompt");
         assert!(content.contains("REAL_GIT"), "should define REAL_GIT");
-        assert!(content.contains(".blameprompt/bin"), "should skip own bin dir");
+        assert!(
+            content.contains(".blameprompt/bin"),
+            "should skip own bin dir"
+        );
         assert!(content.contains("attach"), "should run attach after commit");
-        assert!(content.contains("refs/notes/blameprompt"), "should push notes after push");
-        assert!(content.contains("/usr/local/bin/blameprompt"), "should embed binary path");
-        assert!(content.contains("BLAMEPROMPT="), "should set BLAMEPROMPT variable");
+        assert!(
+            content.contains("refs/notes/blameprompt"),
+            "should push notes after push"
+        );
+        assert!(
+            content.contains("/usr/local/bin/blameprompt"),
+            "should embed binary path"
+        );
+        assert!(
+            content.contains("BLAMEPROMPT="),
+            "should set BLAMEPROMPT variable"
+        );
     }
 }
