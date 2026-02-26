@@ -1017,6 +1017,23 @@ fn handle_stop(agent: &str, input: &HookInput) {
             redact::redact_secrets_with_config(&truncated, &ctx.cfg)
         });
 
+    // The JSONL transcript may not have the final assistant message flushed yet when Stop fires.
+    // If response_summary is available but the conversation doesn't already end with an
+    // assistant turn, append it so the conversation array captures the full exchange.
+    if let Some(ref summary) = response_summary {
+        let has_assistant_turn = current_turns.iter().any(|t| t.role == "assistant");
+        if !has_assistant_turn {
+            let next_turn = current_turns.last().map_or(0, |t| t.turn + 1);
+            current_turns.push(crate::core::receipt::ConversationTurn {
+                turn: next_turn,
+                role: "assistant".to_string(),
+                content: summary.clone(),
+                tool_name: None,
+                files_touched: None,
+            });
+        }
+    }
+
     // Per-prompt cost/tokens — avoids the cumulative full-session totals that inflate costs.
     let (prompt_cost, prompt_tokens) = prompt_cost_and_tokens(&ctx, current_pn);
 

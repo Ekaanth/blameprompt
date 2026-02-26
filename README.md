@@ -2,39 +2,85 @@
 
 **git blame, but for AI prompts.**
 
-An open-source CLI that records exactly which AI prompt generated which code — every file, every line range, every model, every dollar spent. Works with **Claude Code, GitHub Copilot, OpenAI Codex CLI, Google Gemini CLI, Cursor, and Windsurf**. Stored as [Git Notes](https://git-scm.com/docs/git-notes) — nothing added to your working tree, nothing leaves your machine.
+An open-source CLI that records exactly which AI prompt generated which code — every file, every line range, every model, every dollar spent. Stored as [Git Notes](https://git-scm.com/docs/git-notes) — nothing added to your working tree, nothing leaves your machine.
 
 ```
 $ blameprompt blame src/auth.rs
 
-  src/auth.rs
+ Line  Code                                        Source  Provider  Model              Cost     Prompt
+ ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+    1  use jsonwebtoken::{encode, Header};          Human
+    2  use serde::{Deserialize, Serialize};         Human
+    3                                               Human
+    4  #[derive(Serialize, Deserialize)]            AI      claude    claude-sonnet-4-5  $0.0112  Add JWT claims struct
+    5  pub struct Claims {                          AI      claude    claude-sonnet-4-5  $0.0112  Add JWT claims struct
+    6      pub sub: String,                         AI      claude    claude-sonnet-4-5  $0.0112  Add JWT claims struct
+    7      pub exp: usize,                          AI      claude    claude-sonnet-4-5  $0.0112  Add JWT claims struct
+    8  }                                            AI      claude    claude-sonnet-4-5  $0.0112  Add JWT claims struct
+    9                                               Human
+   10  pub fn validate(token: &str) -> bool {       Human
+   11      // manual validation logic               Human
 
-   1 | use jsonwebtoken::{encode, Header};    human
-   2 | use serde::{Deserialize, Serialize};   human
-   3 |
-   4 | #[derive(Serialize, Deserialize)]       AI  Claude Sonnet 4.5  a1b2c3d  2026-02-24
-   5 | pub struct Claims {                     AI  Claude Sonnet 4.5  a1b2c3d  2026-02-24
-   6 |     pub sub: String,                    AI  Claude Sonnet 4.5  a1b2c3d  2026-02-24
-   7 |     pub exp: usize,                     AI  Claude Sonnet 4.5  a1b2c3d  2026-02-24
-   8 | }                                       AI  Claude Sonnet 4.5  a1b2c3d  2026-02-24
-   9 |
-  10 | pub fn validate(token: &str) -> bool {  human
-  11 |     // manual validation logic           human
-
-  5/11 lines (45.5%) written by AI
+Code Origin: 45.5% AI-generated, 54.5% human
 ```
 
 ## Supported agents
 
-| Agent | Integration | Import command |
-|-------|------------|----------------|
-| **Claude Code** | Real-time hooks (10 events) | Automatic via `~/.claude/settings.json` |
-| **GitHub Copilot** | VS Code workspace SQLite | `blameprompt record-copilot` |
-| **OpenAI Codex CLI** | JSONL transcript parser | `blameprompt record-codex` |
-| **Google Gemini CLI** | JSONL/JSON session parser | `blameprompt record-gemini` |
-| **Cursor** | Workspace SQLite | `blameprompt record-cursor` |
-| **Windsurf** | Workspace SQLite | `blameprompt record-windsurf` |
-| **Any provider** | Manual JSONL import | `blameprompt record --session <file> --provider <name>` |
+All detected agents are auto-configured when you run `blameprompt init --global`. If an agent isn't installed, it's silently skipped.
+
+| Agent | Hook config | Import historical sessions |
+|-------|------------|---------------------------|
+| **Claude Code** | `~/.claude/settings.json` (10+ lifecycle events) | Automatic |
+| **GitHub Copilot** | `~/.github/hooks/blameprompt.json` | `blameprompt record-copilot` |
+| **OpenAI Codex CLI** | `~/.codex/config.toml` | `blameprompt record-codex` |
+| **Google Gemini CLI** | `~/.gemini/settings.json` | `blameprompt record-gemini` |
+| **Cursor** | `~/.cursor/hooks.json` | `blameprompt record-cursor` |
+| **Windsurf (Codeium)** | `~/.windsurf/hooks.json` | `blameprompt record-windsurf` |
+| **Any provider** | — | `blameprompt record --session <file> --provider <name>` |
+
+The `record-*` commands are only needed to import **historical sessions** from before blameprompt was installed. Once hooks are active, all new AI activity is tracked automatically.
+
+## VS Code extension
+
+> Coming soon.
+
+The companion VS Code extension will provide a rich sidebar with three views:
+
+**Prompt Receipts** — tree view structured as:
+```
+commit (subject · author · sha · time ago)
+  └─ "Add JWT validation..." (sonnet-4-5 · 3 files · $0.03 · 2m ago)
+       ├─ src/auth.rs:4-8           (5L)      <- click to open file
+       ├─ src/middleware.rs:15-30   (16L)
+       ├─ Write                     tool      <- tools used
+       ├─ Edit                      tool
+       ├─ github                    MCP server <- MCP servers called
+       └─ "Run tests (Bash)"       sub-agent  <- agents spawned
+```
+
+**Prompt History** — git-log-style visual timeline with:
+- Commit rows showing author, SHA, prompt count, cost
+- Collapsible file lists per prompt
+- Model-colored labels (Claude=orange, OpenAI=green, Google=blue)
+- Tool/MCP/agent chips on each prompt
+- Real-time filter search
+
+**File History** — shows all prompts that modified the currently open file, auto-updates as you switch tabs.
+
+Click any prompt to open a detailed receipt view with the full chain of thought (conversation turns, tool calls, files touched).
+
+## Enterprise
+
+BlamePrompt Enterprise provides organizational-level AI code observability:
+
+- Aggregate AI code composition metrics across teams and repositories
+- Full lifecycle tracking from initial generation through production deployment
+- Agent and model effectiveness comparison
+- Secure prompt storage with redaction and PII filtering
+- Cross-repository dashboards and analytics
+- Self-hosted or cloud deployment
+
+To learn more or book a demo, visit [blameprompt.com](https://blameprompt.com).
 
 ## Install
 
@@ -232,33 +278,6 @@ Auto-attaches receipts on every `git commit` and auto-pushes notes on `git push`
 ```bash
 blameprompt install-git-wrap        # install ~/.blameprompt/bin/git shim
 ```
-
-## VS Code extension
-
-The companion [blameprompt-vscode](https://github.com/ekaanth/blameprompt-vscode) extension provides a rich sidebar with three views:
-
-**Prompt Receipts** — tree view structured as:
-```
-commit (subject · author · sha · time ago)
-  └─ "Add JWT validation..." (sonnet-4-5 · 3 files · $0.03 · 2m ago)
-       ├─ src/auth.rs:4-8           (5L)      <- click to open file
-       ├─ src/middleware.rs:15-30   (16L)
-       ├─ Write                     tool      <- tools used
-       ├─ Edit                      tool
-       ├─ github                    MCP server <- MCP servers called
-       └─ "Run tests (Bash)"       sub-agent  <- agents spawned
-```
-
-**Prompt History** — git-log-style visual timeline with:
-- Commit rows showing author, SHA, prompt count, cost
-- Collapsible file lists per prompt
-- Model-colored labels (Claude=orange, OpenAI=green, Google=blue)
-- Tool/MCP/agent chips on each prompt
-- Real-time filter search
-
-**File History** — shows all prompts that modified the currently open file, auto-updates as you switch tabs.
-
-Click any prompt to open a detailed receipt view with the full chain of thought (conversation turns, tool calls, files touched).
 
 ## Git hooks
 

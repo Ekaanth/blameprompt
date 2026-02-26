@@ -79,7 +79,7 @@ pub fn find_sessions_dirs() -> Vec<PathBuf> {
 }
 
 /// List session files across all session directories, sorted by most recent.
-/// Follows git-ai's pattern of looking for rollout-*.jsonl files.
+/// Looks for rollout-*.jsonl files in the sessions directory.
 pub fn list_session_files(sessions_dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = Vec::new();
     collect_session_files_recursive(sessions_dir, &mut files);
@@ -148,7 +148,7 @@ pub fn parse_codex_session(path: &Path) -> Option<CodexSession> {
 
         let entry_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
-        // Handle Codex-specific entry types (from git-ai's CodexPreset)
+        // Handle Codex-specific entry types
         match entry_type {
             // turn_context contains model metadata
             "turn_context" => {

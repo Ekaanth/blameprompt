@@ -26,18 +26,34 @@ fn mark_setup_done() {
 }
 
 /// Try to install hooks for all detected AI agents.
-/// Failures are non-fatal — agents that aren't installed are silently skipped.
-fn install_all_agent_hooks() {
+/// Returns a list of agent names that were successfully configured.
+/// Agents that aren't installed on the machine are silently skipped.
+fn install_all_agent_hooks() -> Vec<&'static str> {
+    let mut installed = Vec::new();
+
     // Claude Code (always installed — it's our primary integration)
-    let _ = claude_hooks::install();
+    if claude_hooks::install().is_ok() {
+        installed.push("Claude Code");
+    }
 
     // Detect and install hooks for other agents if present
-    // Each returns Err if agent not installed — silently skip those
-    let _ = codex::install_hooks();
-    let _ = gemini::install_hooks();
-    let _ = copilot::install_hooks();
-    let _ = cursor::install_hooks();
-    let _ = windsurf::install_hooks();
+    if codex::install_hooks().is_ok() {
+        installed.push("Codex");
+    }
+    if gemini::install_hooks().is_ok() {
+        installed.push("Gemini");
+    }
+    if copilot::install_hooks().is_ok() {
+        installed.push("Copilot");
+    }
+    if cursor::install_hooks().is_ok() {
+        installed.push("Cursor");
+    }
+    if windsurf::install_hooks().is_ok() {
+        installed.push("Windsurf");
+    }
+
+    installed
 }
 
 /// Auto-setup: called on every blameprompt invocation.
@@ -48,7 +64,7 @@ pub fn auto_setup() {
     }
 
     // Install hooks for all detected AI agents
-    install_all_agent_hooks();
+    let agents = install_all_agent_hooks();
 
     // Install git template (sets init.templateDir so every git init gets hooks)
     if install_git_template().is_err() {
@@ -67,11 +83,11 @@ pub fn auto_setup() {
         }
     }
 
-    print_install_banner(true);
+    print_install_banner(true, &agents);
 }
 
 /// Shared install banner for auto_setup (stderr) and run_init (stdout).
-fn print_install_banner(use_stderr: bool) {
+fn print_install_banner(use_stderr: bool, installed_agents: &[&str]) {
     let home = dirs::home_dir()
         .map(|h| h.display().to_string())
         .unwrap_or_else(|| "~".to_string());
@@ -86,7 +102,7 @@ fn print_install_banner(use_stderr: bool) {
     let bw = "\x1b[1;37m"; // bold white
 
     // Collect all lines into a Vec, then print to stderr or stdout
-    let lines = vec![
+    let mut lines = vec![
         String::new(),
         format!("  {bc}  ██████╗ ██╗      █████╗ ███╗   ███╗███████╗{r}"),
         format!("  {bc}  ██╔══██╗██║     ██╔══██╗████╗ ████║██╔════╝{r}"),
@@ -100,14 +116,27 @@ fn print_install_banner(use_stderr: bool) {
         format!("  {bg}  ██╔═══╝ ██╔══██╗██║   ██║██║╚██╔╝██║██╔═══╝    ██║{r}"),
         format!("  {bg}  ██║     ██║  ██║╚██████╔╝██║ ╚═╝ ██║██║        ██║{r}"),
         format!("  {bg}  ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚═╝        ╚═╝{r}"),
-        format!("  {d}  v{} · Track AI-generated code in Git{r}", env!("CARGO_PKG_VERSION")),
+        format!(
+            "  {d}  v{} · Track AI-generated code in Git{r}",
+            env!("CARGO_PKG_VERSION")
+        ),
         String::new(),
         format!("Installing BlamePrompt..."),
         String::new(),
-        format!("  {bg}[done]{r} Claude Code hooks installed (10 lifecycle hooks)"),
-        format!("         {d}→ {home}/.claude/settings.json{r}"),
-        format!("  {bg}[done]{r} Multi-agent hooks installed (Codex, Gemini, Copilot, Cursor, Windsurf)"),
-        format!("         {d}→ detected agents configured automatically{r}"),
+    ];
+
+    // Show each successfully installed agent individually
+    for agent in installed_agents {
+        lines.push(format!("  {bg}[done]{r} {agent} hooks installed"));
+    }
+    if installed_agents.is_empty() {
+        lines.push(format!(
+            "  {d}[skip]{r} No AI agents detected — hooks will be installed when agents are available"
+        ));
+    }
+
+    lines.extend([
+        String::new(),
         format!("  {bg}[done]{r} Git template configured (7 git hooks)"),
         format!("         {d}→ {home}/.blameprompt/git-template{r}"),
         format!("  {bg}[done]{r} Transparent git wrapper installed"),
@@ -115,9 +144,12 @@ fn print_install_banner(use_stderr: bool) {
         format!("  {bg}[done]{r} All future repos will auto-track AI prompts"),
         String::new(),
         format!("{bw}BlamePrompt installed.{r}"),
-        format!("  Global hooks configured"),
-        format!("  Git template ready"),
-        format!("  Transparent git wrapper active"),
+        format!(
+            "  {bg}{}{r} agent(s) configured",
+            installed_agents.len()
+        ),
+        "  Git template ready".to_string(),
+        "  Transparent git wrapper active".to_string(),
         String::new(),
         format!("{b}Get started:{r}"),
         format!("  {c}blameprompt blame{r} {d}<file>{r}       {d}Line-by-line AI vs human attribution{r}"),
@@ -132,7 +164,7 @@ fn print_install_banner(use_stderr: bool) {
         format!("  {c}blameprompt pull{r}               {d}Fetch receipts from remote{r}"),
         format!("  {c}blameprompt --help{r}             {d}See all commands{r}"),
         String::new(),
-    ];
+    ]);
 
     for line in &lines {
         if use_stderr {
@@ -240,7 +272,7 @@ pub fn auto_init_blameprompt(repo_root: &str) -> Result<(), String> {
 pub fn run_init(global: bool) -> Result<(), String> {
     if global {
         install_git_template()?;
-        install_all_agent_hooks();
+        let agents = install_all_agent_hooks();
         // Install transparent git wrapper (optional; failure is non-fatal)
         let _ = wrap::install();
         mark_setup_done();
@@ -252,7 +284,7 @@ pub fn run_init(global: bool) -> Result<(), String> {
             }
         }
 
-        print_install_banner(false);
+        print_install_banner(false, &agents);
     } else {
         let cwd = std::env::current_dir().map_err(|e| format!("Cannot get cwd: {}", e))?;
 
