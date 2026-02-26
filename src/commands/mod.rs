@@ -5,6 +5,7 @@ pub mod check_provenance;
 pub mod checkpoint;
 pub mod diff;
 pub mod github;
+pub mod hackathon;
 pub mod license_scan;
 pub mod prompt_injection;
 pub mod rebase_notes;

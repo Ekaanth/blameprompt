@@ -169,6 +169,68 @@ pub fn run(commit: &str, format: &str) {
         }
     }
 
+    // Show session continuation chains
+    let continuations: Vec<_> = payload
+        .receipts
+        .iter()
+        .filter(|r| r.parent_session_id.is_some())
+        .collect();
+    if !continuations.is_empty() {
+        println!("\nSession Continuations:");
+        for r in &continuations {
+            let parent_sid = r.parent_session_id.as_ref().unwrap();
+            let parent_short = util::short_sha(parent_sid);
+            let session_short = util::short_sha(&r.session_id);
+            let depth = r.continuation_depth.unwrap_or(1);
+            println!(
+                "  Session {} -> {} (continuation #{}, context exhausted)",
+                parent_short, session_short, depth
+            );
+        }
+    }
+
+    // Show subagent activity details
+    for r in &payload.receipts {
+        if !r.subagent_activities.is_empty() {
+            let id_short = util::short_sha(&r.id);
+            println!("\nSubagent Activity for receipt {}:", id_short);
+            for a in &r.subagent_activities {
+                let agent_type = a.agent_type.as_deref().unwrap_or("unknown");
+                let desc = a.description.as_deref().unwrap_or("-");
+                let tools = if a.tools_used.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (tools: {})", a.tools_used.join(", "))
+                };
+                println!(
+                    "  [{}] \"{}\" -- {}{}",
+                    agent_type, desc, a.status, tools
+                );
+            }
+            if let Some(max_concurrent) = r.concurrent_tool_calls {
+                println!("  Max concurrent tool calls: {}", max_concurrent);
+            }
+        }
+    }
+
+    // Show user decisions
+    for r in &payload.receipts {
+        if !r.user_decisions.is_empty() {
+            let id_short = util::short_sha(&r.id);
+            println!("\nUser Decisions for receipt {}:", id_short);
+            for d in &r.user_decisions {
+                let header = d.header.as_deref().unwrap_or("Question");
+                let answer_display = d.answer.as_deref().unwrap_or("(no answer recorded)");
+                println!("  [{}] {}", header, d.question);
+                for opt in &d.options {
+                    let marker = if opt.selected { ">" } else { " " };
+                    println!("    {} {}", marker, opt.label);
+                }
+                println!("    Answer: {}", answer_display);
+            }
+        }
+    }
+
     // Show conversation chain of thought
     for r in &payload.receipts {
         if let Some(ref turns) = r.conversation {

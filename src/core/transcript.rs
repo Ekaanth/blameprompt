@@ -12,8 +12,12 @@ pub enum Message {
         /// The model that generated this specific response (e.g. "claude-opus-4-6").
         /// Stored per-message so model switches mid-session are tracked correctly.
         model: Option<String>,
+        /// Token usage from this specific API call.
+        /// Set only on the first text message per JSONL assistant entry to avoid double-counting.
+        usage: Option<TokenUsage>,
     },
     ToolUse {
+        id: String,
         name: String,
         input: serde_json::Value,
     },
@@ -22,6 +26,15 @@ pub enum Message {
 #[derive(Debug)]
 pub struct Transcript {
     pub messages: Vec<Message>,
+}
+
+/// Aggregated token usage from all assistant messages in the transcript.
+#[derive(Debug, Clone, Default)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
 }
 
 #[derive(Debug)]
@@ -34,6 +47,9 @@ pub struct TranscriptParseResult {
     pub session_end: Option<DateTime<Utc>>,
     pub session_duration_secs: Option<u64>,
     pub avg_response_time_secs: Option<f64>,
+    /// Timestamps of each user prompt message (1-indexed: index 0 = prompt 1).
+    /// Used for setting accurate per-receipt timestamps instead of Utc::now().
+    pub user_prompt_timestamps: Vec<DateTime<Utc>>,
 }
 
 pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult, String> {
@@ -59,6 +75,7 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
     let mut last_timestamp: Option<DateTime<Utc>> = None;
     let mut response_times: Vec<f64> = Vec::new();
     let mut last_user_timestamp: Option<DateTime<Utc>> = None;
+    let mut user_prompt_timestamps: Vec<DateTime<Utc>> = Vec::new();
 
     for line in content.lines() {
         let line = line.trim();
@@ -150,6 +167,14 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                     }
                 }
 
+                // Capture per-prompt timestamp for real prompts (matches count_user_prompts logic).
+                if is_real_prompt(&text) {
+                    if let Some(ts_str) = entry.get("timestamp").and_then(|v| v.as_str()) {
+                        if let Ok(ts) = ts_str.parse::<DateTime<Utc>>() {
+                            user_prompt_timestamps.push(ts);
+                        }
+                    }
+                }
                 messages.push(Message::User { text });
             }
             Some("assistant") => {
@@ -162,6 +187,29 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                 if entry_model.is_some() {
                     model = entry_model.clone();
                 }
+
+                // Extract actual token usage from the usage field.
+                // Claude Code writes usage data on each assistant message with real API token counts.
+                // Store per-entry usage so we can attribute costs to individual prompts later.
+                let mut entry_usage: Option<TokenUsage> = None;
+                if let Some(usage) = msg.and_then(|m| m.get("usage")) {
+                    let it = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let ot = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let cr = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let cc = usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    if it > 0 || ot > 0 {
+                        entry_usage = Some(TokenUsage {
+                            input_tokens: it,
+                            output_tokens: ot,
+                            cache_read_tokens: cr,
+                            cache_creation_tokens: cc,
+                        });
+                    }
+                }
+
+                // Track whether usage has been assigned to the first text message in this entry.
+                // Only the first Message::Assistant gets the usage to avoid double-counting.
+                let mut usage_assigned = false;
 
                 // Parse content array
                 if let Some(content_arr) = msg
@@ -176,9 +224,16 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("")
                                     .to_string();
+                                let msg_usage = if !usage_assigned {
+                                    usage_assigned = true;
+                                    entry_usage.clone()
+                                } else {
+                                    None
+                                };
                                 messages.push(Message::Assistant {
                                     text,
                                     model: entry_model.clone(),
+                                    usage: msg_usage,
                                 });
                             }
                             Some("tool_use") => {
@@ -220,7 +275,12 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                                     }
                                 }
 
-                                messages.push(Message::ToolUse { name, input });
+                                let id = item
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                messages.push(Message::ToolUse { id, name, input });
                             }
                             _ => {}
                         }
@@ -232,6 +292,7 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                     messages.push(Message::Assistant {
                         text: content_str.to_string(),
                         model: entry_model,
+                        usage: entry_usage,
                     });
                 }
             }
@@ -259,6 +320,7 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
         session_end: last_timestamp,
         session_duration_secs,
         avg_response_time_secs,
+        user_prompt_timestamps,
     })
 }
 
@@ -318,19 +380,6 @@ pub fn nth_user_prompt(transcript: &Transcript, n: u32) -> Option<String> {
         }
     }
     None
-}
-
-/// Returns the last (most recent) non-empty user prompt in the transcript.
-pub fn last_user_prompt(transcript: &Transcript) -> Option<String> {
-    transcript.messages.iter().rev().find_map(|msg| {
-        if let Message::User { text, .. } = msg {
-            if is_real_prompt(text) {
-                let truncated: String = text.chars().take(200).collect();
-                return Some(truncated);
-            }
-        }
-        None
-    })
 }
 
 /// Count the number of user prompts in the transcript.
@@ -647,6 +696,204 @@ pub fn extract_agents_spawned(transcript: &Transcript) -> Vec<String> {
     agents
 }
 
+/// Extract tools/MCP servers/agents scoped to a specific prompt (1-indexed).
+/// Uses `prompt_message_slice` to avoid attributing full-session data to a single prompt.
+pub fn extract_tools_for_prompt(transcript: &Transcript, prompt_number: u32) -> Vec<String> {
+    let slice = prompt_message_slice(&transcript.messages, prompt_number);
+    if slice.is_empty() {
+        return vec![];
+    }
+    let sub = Transcript {
+        messages: slice.to_vec(),
+    };
+    extract_tools_used(&sub)
+}
+
+pub fn extract_mcps_for_prompt(transcript: &Transcript, prompt_number: u32) -> Vec<String> {
+    let slice = prompt_message_slice(&transcript.messages, prompt_number);
+    if slice.is_empty() {
+        return vec![];
+    }
+    let sub = Transcript {
+        messages: slice.to_vec(),
+    };
+    extract_mcp_servers(&sub)
+}
+
+/// Sum token usage from only the assistant messages within the Nth prompt's slice.
+/// Returns None if no usage data exists in that slice (e.g. JSONL lacks token counts).
+pub fn token_usage_for_prompt(transcript: &Transcript, prompt_number: u32) -> Option<TokenUsage> {
+    let slice = prompt_message_slice(&transcript.messages, prompt_number);
+    let mut total = TokenUsage::default();
+    let mut found = false;
+    for msg in slice {
+        if let Message::Assistant { usage: Some(u), .. } = msg {
+            total.input_tokens += u.input_tokens;
+            total.output_tokens += u.output_tokens;
+            total.cache_read_tokens += u.cache_read_tokens;
+            total.cache_creation_tokens += u.cache_creation_tokens;
+            found = true;
+        }
+    }
+    if found { Some(total) } else { None }
+}
+
+pub fn extract_agents_for_prompt(transcript: &Transcript, prompt_number: u32) -> Vec<String> {
+    let slice = prompt_message_slice(&transcript.messages, prompt_number);
+    if slice.is_empty() {
+        return vec![];
+    }
+    let sub = Transcript {
+        messages: slice.to_vec(),
+    };
+    extract_agents_spawned(&sub)
+}
+
+/// Extract file paths modified by Write/Edit/MultiEdit/NotebookEdit tools in a specific prompt.
+/// Lightweight alternative to full conversation extraction — only returns file paths.
+pub fn files_for_prompt(transcript: &Transcript, prompt_number: u32) -> Vec<String> {
+    let slice = prompt_message_slice(&transcript.messages, prompt_number);
+    let mut files = Vec::new();
+    for msg in slice {
+        if let Message::ToolUse { input, name, .. } = msg {
+            match name.as_str() {
+                "Write" | "Edit" | "NotebookEdit" => {
+                    if let Some(fp) = input.get("file_path").and_then(|v| v.as_str()) {
+                        if !files.contains(&fp.to_string()) {
+                            files.push(fp.to_string());
+                        }
+                    }
+                }
+                "MultiEdit" => {
+                    if let Some(edits) = input.get("edits").and_then(|e| e.as_array()) {
+                        for edit in edits {
+                            if let Some(fp) = edit.get("file_path").and_then(|v| v.as_str()) {
+                                if !files.contains(&fp.to_string()) {
+                                    files.push(fp.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    files
+}
+
+/// Count the maximum number of tool calls that appear consecutively in the transcript,
+/// approximating the max parallel tool use within a single assistant turn.
+pub fn count_concurrent_tools(transcript: &Transcript) -> u32 {
+    let mut max_concurrent: u32 = 0;
+    let mut current_streak: u32 = 0;
+
+    for msg in &transcript.messages {
+        match msg {
+            Message::ToolUse { .. } => {
+                current_streak += 1;
+                max_concurrent = max_concurrent.max(current_streak);
+            }
+            _ => {
+                current_streak = 0;
+            }
+        }
+    }
+    max_concurrent
+}
+
+/// Extract structured UserDecision data from AskUserQuestion tool_use/tool_result pairs.
+///
+/// Walks the transcript messages in order. When an AskUserQuestion ToolUse is found,
+/// it captures the questions/options from the input along with the tool_use id.
+/// Then matches answers from `[choice]`-prefixed User messages by option label matching.
+pub fn extract_user_decisions(transcript: &Transcript) -> Vec<crate::core::receipt::UserDecision> {
+    use crate::core::receipt::{DecisionOption, UserDecision};
+
+    let mut decisions: Vec<UserDecision> = Vec::new();
+
+    // Phase 1: Collect all AskUserQuestion tool_use entries with their questions.
+    for msg in &transcript.messages {
+        if let Message::ToolUse { id, name, input } = msg {
+            if name != "AskUserQuestion" {
+                continue;
+            }
+            if let Some(questions) = input.get("questions").and_then(|q| q.as_array()) {
+                for q in questions {
+                    let question = match q.get("question").and_then(|v| v.as_str()) {
+                        Some(q) => q.to_string(),
+                        None => continue,
+                    };
+                    let header = q.get("header").and_then(|v| v.as_str()).map(String::from);
+                    let multi_select = q
+                        .get("multiSelect")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let options: Vec<DecisionOption> = q
+                        .get("options")
+                        .and_then(|o| o.as_array())
+                        .map(|opts| {
+                            opts.iter()
+                                .filter_map(|opt| {
+                                    Some(DecisionOption {
+                                        label: opt
+                                            .get("label")
+                                            .and_then(|v| v.as_str())?
+                                            .to_string(),
+                                        selected: false,
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    decisions.push(UserDecision {
+                        tool_use_id: id.clone(),
+                        question,
+                        header,
+                        options,
+                        multi_select,
+                        answer: None,
+                    });
+                }
+            }
+        }
+    }
+
+    if decisions.is_empty() {
+        return vec![];
+    }
+
+    // Phase 2: Find answers in [choice]-prefixed User messages.
+    for msg in &transcript.messages {
+        if let Message::User { text } = msg {
+            if let Some(answer_text) = text.strip_prefix("[choice] ") {
+                // Match answer to pending decisions by checking option labels.
+                for decision in &mut decisions {
+                    if decision.answer.is_some() {
+                        continue;
+                    }
+                    let answer_parts: Vec<&str> = answer_text.split("; ").collect();
+                    let mut matched = false;
+                    for part in &answer_parts {
+                        for opt in &mut decision.options {
+                            if opt.label == *part {
+                                opt.selected = true;
+                                matched = true;
+                            }
+                        }
+                    }
+                    if matched {
+                        decision.answer = Some(answer_text.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    decisions
+}
+
 /// Return the slice of messages that belong exclusively to the Nth user prompt (1-indexed).
 ///
 /// Spans from the Nth non-empty user message up to (but not including) the (N+1)th
@@ -676,6 +923,15 @@ fn prompt_message_slice(messages: &[Message], prompt_number: u32) -> &[Message] 
     }
 
     &[]
+}
+
+/// Return the timestamp of the Nth user prompt (1-indexed) from the JSONL.
+/// Returns None if the prompt number is out of range.
+pub fn timestamp_for_prompt(result: &TranscriptParseResult, prompt_number: u32) -> Option<DateTime<Utc>> {
+    if prompt_number == 0 {
+        return None;
+    }
+    result.user_prompt_timestamps.get((prompt_number - 1) as usize).copied()
 }
 
 /// Return the model used for the Nth user prompt (1-indexed).
@@ -779,7 +1035,7 @@ mod tests {
         // The user message with array content should be parsed correctly
         assert_eq!(count_user_prompts(&result.transcript), 1);
         assert_eq!(
-            last_user_prompt(&result.transcript),
+            nth_user_prompt(&result.transcript, 1),
             Some("fix the bug".to_string())
         );
         std::fs::remove_file(tmp).ok();
@@ -817,11 +1073,13 @@ mod tests {
                 Message::Assistant {
                     text: "response 1".to_string(),
                     model: Some("claude-sonnet-4-6".to_string()),
+                    usage: None,
                 },
                 Message::User { text: "second prompt".to_string() },
                 Message::Assistant {
                     text: "response 2".to_string(),
                     model: Some("claude-opus-4-6".to_string()),
+                    usage: None,
                 },
             ],
         };
@@ -838,6 +1096,61 @@ mod tests {
         );
         // Out-of-range prompt → None
         assert_eq!(model_for_prompt(&transcript, 3), None);
+    }
+
+    #[test]
+    fn test_token_usage_for_prompt() {
+        let transcript = Transcript {
+            messages: vec![
+                Message::User { text: "first prompt".to_string() },
+                Message::Assistant {
+                    text: "response 1".to_string(),
+                    model: None,
+                    usage: Some(TokenUsage {
+                        input_tokens: 1000,
+                        output_tokens: 500,
+                        cache_read_tokens: 200,
+                        cache_creation_tokens: 50,
+                    }),
+                },
+                Message::User { text: "second prompt".to_string() },
+                Message::Assistant {
+                    text: "response 2a".to_string(),
+                    model: None,
+                    usage: Some(TokenUsage {
+                        input_tokens: 2000,
+                        output_tokens: 800,
+                        cache_read_tokens: 400,
+                        cache_creation_tokens: 100,
+                    }),
+                },
+                Message::Assistant {
+                    text: "response 2b".to_string(),
+                    model: None,
+                    usage: Some(TokenUsage {
+                        input_tokens: 500,
+                        output_tokens: 200,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
+                    }),
+                },
+            ],
+        };
+
+        // Prompt 1: only 1000/500 tokens
+        let u1 = token_usage_for_prompt(&transcript, 1).unwrap();
+        assert_eq!(u1.input_tokens, 1000);
+        assert_eq!(u1.output_tokens, 500);
+        assert_eq!(u1.cache_read_tokens, 200);
+
+        // Prompt 2: sum of both assistant messages = 2500/1000
+        let u2 = token_usage_for_prompt(&transcript, 2).unwrap();
+        assert_eq!(u2.input_tokens, 2500);
+        assert_eq!(u2.output_tokens, 1000);
+        assert_eq!(u2.cache_read_tokens, 400);
+
+        // Out-of-range → None
+        assert!(token_usage_for_prompt(&transcript, 3).is_none());
     }
 
     #[test]
@@ -902,6 +1215,49 @@ mod tests {
         let choice_turn = turns.iter().find(|t| t.role == "choice");
         assert!(choice_turn.is_some(), "choice turn should appear in conversation");
         assert!(choice_turn.unwrap().content.contains("CSS variables"));
+    }
+
+    #[test]
+    fn test_extract_user_decisions() {
+        let messages = vec![
+            Message::User {
+                text: "implement dark mode".to_string(),
+            },
+            Message::ToolUse {
+                id: "toolu_001".to_string(),
+                name: "AskUserQuestion".to_string(),
+                input: serde_json::json!({
+                    "questions": [{
+                        "question": "Which approach?",
+                        "header": "Approach",
+                        "options": [{"label": "CSS variables"}, {"label": "Theme context"}],
+                        "multiSelect": false
+                    }]
+                }),
+            },
+            Message::User {
+                text: "[choice] CSS variables".to_string(),
+            },
+            Message::Assistant {
+                text: "I'll use CSS variables.".to_string(),
+                model: None,
+                usage: None,
+            },
+        ];
+        let transcript = Transcript { messages };
+        let decisions = extract_user_decisions(&transcript);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].tool_use_id, "toolu_001");
+        assert_eq!(decisions[0].question, "Which approach?");
+        assert_eq!(decisions[0].header, Some("Approach".to_string()));
+        assert_eq!(decisions[0].options.len(), 2);
+        assert!(decisions[0].options[0].selected); // CSS variables
+        assert!(!decisions[0].options[1].selected); // Theme context
+        assert_eq!(
+            decisions[0].answer,
+            Some("CSS variables".to_string())
+        );
+        assert!(!decisions[0].multi_select);
     }
 
     #[test]
@@ -975,16 +1331,19 @@ mod tests {
                     text: "fix the bug".to_string(),
                 },
                 Message::ToolUse {
+                    id: String::new(),
                     name: "Bash".to_string(),
                     input: serde_json::json!({"command": "git diff"}),
                 },
                 Message::ToolUse {
+                    id: String::new(),
                     name: "Write".to_string(),
                     input: serde_json::json!({"file_path": "/home/user/src/main.rs", "content": "..."}),
                 },
                 Message::Assistant {
                     text: "I fixed the bug by updating main.rs".to_string(),
                     model: None,
+                    usage: None,
                 },
             ],
         };

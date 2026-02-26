@@ -706,6 +706,22 @@ fn write_session_analysis(md: &mut String, receipts: &[&Receipt]) {
     let multi_file = session_stats.values().filter(|s| s.1.len() > 1).count();
     writeln!(md, "| Sessions modifying 1 file | {} |", single_file).ok();
     writeln!(md, "| Sessions modifying 2+ files | {} |", multi_file).ok();
+
+    let continuation_count = receipts.iter().filter(|r| r.is_continuation == Some(true)).count();
+    if continuation_count > 0 {
+        writeln!(md, "| Sessions that are continuations | {} |", continuation_count).ok();
+        let max_depth = receipts.iter().filter_map(|r| r.continuation_depth).max().unwrap_or(0);
+        writeln!(md, "| Longest continuation chain | {} hops |", max_depth).ok();
+    }
+
+    let subagent_count: usize = receipts.iter().map(|r| r.subagent_activities.len()).sum();
+    if subagent_count > 0 {
+        writeln!(md, "| Total subagents spawned | {} |", subagent_count).ok();
+    }
+    let total_decisions: usize = receipts.iter().map(|r| r.user_decisions.len()).sum();
+    if total_decisions > 0 {
+        writeln!(md, "| User decisions recorded | {} |", total_decisions).ok();
+    }
     writeln!(md).ok();
 
     // Top sessions
@@ -785,6 +801,12 @@ fn write_prompt_details(md: &mut String, entries: &[audit::AuditEntry]) {
             writeln!(md, "| Field | Value |").ok();
             writeln!(md, "|-------|-------|").ok();
             writeln!(md, "| Session ID | `{}` |", r.session_id).ok();
+            if let Some(ref psid) = r.parent_session_id {
+                writeln!(md, "| Parent Session | `{}` (continuation) |", psid).ok();
+            }
+            if let Some(depth) = r.continuation_depth {
+                writeln!(md, "| Continuation depth | {} |", depth).ok();
+            }
             writeln!(md, "| Messages | {} |", r.message_count).ok();
             writeln!(md, "| Cost | ${:.4} |", r.cost_usd).ok();
             writeln!(md, "| Files | {} |", file_changes.len()).ok();
@@ -799,7 +821,41 @@ fn write_prompt_details(md: &mut String, entries: &[audit::AuditEntry]) {
             if !r.agents_spawned.is_empty() {
                 writeln!(md, "| Agents Spawned | {} |", r.agents_spawned.join("; ")).ok();
             }
+            if let Some(max_concurrent) = r.concurrent_tool_calls {
+                writeln!(md, "| Max concurrent tools | {} |", max_concurrent).ok();
+            }
             writeln!(md).ok();
+            // Show detailed subagent activity
+            if !r.subagent_activities.is_empty() {
+                writeln!(md, "**Subagent Activity:**").ok();
+                for a in &r.subagent_activities {
+                    let agent_type = a.agent_type.as_deref().unwrap_or("unknown");
+                    let desc = a.description.as_deref().unwrap_or("-");
+                    let tools = if a.tools_used.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (tools: {})", a.tools_used.join(", "))
+                    };
+                    writeln!(md, "- [{}] \"{}\" -- {}{}", agent_type, desc, a.status, tools).ok();
+                }
+                writeln!(md).ok();
+            }
+            // Show user decisions
+            if !r.user_decisions.is_empty() {
+                writeln!(md, "**User Decisions:**").ok();
+                for d in &r.user_decisions {
+                    let header = d.header.as_deref().unwrap_or("Question");
+                    let answer = d.answer.as_deref().unwrap_or("(pending)");
+                    writeln!(md, "- **{}**: {} -> `{}`", header, d.question, answer).ok();
+                    if d.options.len() > 1 {
+                        for opt in &d.options {
+                            let marker = if opt.selected { "[x]" } else { "[ ]" };
+                            writeln!(md, "  - {} {}", marker, opt.label).ok();
+                        }
+                    }
+                }
+                writeln!(md).ok();
+            }
             for fc in &file_changes {
                 writeln!(
                     md,

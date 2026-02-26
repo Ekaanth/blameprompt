@@ -1,11 +1,11 @@
-/// Cursor IDE integration for blameprompt.
+/// GitHub Copilot integration for blameprompt.
 ///
-/// Reads AI chat sessions from Cursor's workspace storage (SQLite) and
-/// converts them to blameprompt receipts staged for the next git commit.
+/// Reads AI chat sessions from VS Code's Copilot Chat extension storage (SQLite)
+/// and converts them to blameprompt receipts staged for the next git commit.
 ///
-/// Cursor stores chat history in:
-///   macOS: ~/Library/Application Support/Cursor/User/workspaceStorage/<hash>/state.vscdb
-///   Linux: ~/.config/Cursor/User/workspaceStorage/<hash>/state.vscdb
+/// Copilot Chat stores history in:
+///   macOS: ~/Library/Application Support/Code/User/workspaceStorage/<hash>/state.vscdb
+///   Linux: ~/.config/Code/User/workspaceStorage/<hash>/state.vscdb
 use crate::commands::staging;
 use crate::core::{config, receipt::Receipt, util};
 use chrono::{DateTime, TimeZone, Utc};
@@ -14,48 +14,74 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// A parsed Cursor AI chat tab.
 #[derive(Debug)]
-pub struct CursorChatSession {
+pub struct CopilotChatSession {
     pub session_id: String,
     pub title: String,
     pub model: String,
-    pub messages: Vec<CursorMessage>,
+    pub messages: Vec<CopilotMessage>,
     pub timestamp: DateTime<Utc>,
 }
 
 #[derive(Debug)]
-pub struct CursorMessage {
-    pub role: String,  // "user" or "assistant"
+pub struct CopilotMessage {
+    pub role: String,
     pub text: String,
     #[allow(dead_code)]
     pub timestamp: Option<DateTime<Utc>>,
 }
 
-// ── Flexible Cursor JSON deserialization ──────────────────────────────────
+// ── Flexible Copilot Chat JSON deserialization ───────────────────────────
 
 #[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct CursorChatRoot {
+struct CopilotChatRoot {
     #[serde(default)]
-    tabs: Vec<CursorTab>,
+    threads: Vec<CopilotThread>,
+    // Fallback: some versions use a flat array of messages
+    #[serde(default)]
+    tabs: Vec<CopilotTab>,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-struct CursorTab {
+struct CopilotThread {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: String,
+    created_at: Option<i64>,
+    #[serde(default)]
+    turns: Vec<CopilotTurn>,
+}
+
+#[derive(Deserialize, Debug)]
+struct CopilotTurn {
+    #[allow(dead_code)]
+    #[serde(default)]
+    role: String,
+    #[serde(default)]
+    request: String,
+    #[serde(default)]
+    response: String,
+    #[serde(default)]
+    model: String,
+    timestamp: Option<i64>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct CopilotTab {
     #[serde(default)]
     tab_id: String,
     #[serde(default)]
     chat_title: String,
     last_updated_at: Option<i64>,
     #[serde(default)]
-    conversation: Vec<CursorChatEntry>,
+    conversation: Vec<CopilotEntry>,
 }
 
 #[derive(Deserialize, Debug)]
-struct CursorChatEntry {
-    // "type" can be "human" | "ai" | "user" | "assistant"
+struct CopilotEntry {
     #[serde(rename = "type", default)]
     entry_type: String,
     #[serde(default)]
@@ -69,7 +95,7 @@ struct CursorChatEntry {
     model: String,
 }
 
-impl CursorChatEntry {
+impl CopilotEntry {
     fn effective_role(&self) -> String {
         let raw = if !self.role.is_empty() {
             self.role.as_str()
@@ -78,7 +104,7 @@ impl CursorChatEntry {
         };
         match raw.to_lowercase().as_str() {
             "human" | "user" => "user".to_string(),
-            "ai" | "assistant" | "bot" => "assistant".to_string(),
+            "ai" | "assistant" | "bot" | "copilot" => "assistant".to_string(),
             other => other.to_string(),
         }
     }
@@ -94,19 +120,21 @@ impl CursorChatEntry {
     fn effective_timestamp(&self) -> Option<DateTime<Utc>> {
         self.timestamp.map(|ms| {
             if ms > 1_000_000_000_000 {
-                // Milliseconds
-                Utc.timestamp_millis_opt(ms).single().unwrap_or_else(Utc::now)
+                Utc.timestamp_millis_opt(ms)
+                    .single()
+                    .unwrap_or_else(Utc::now)
             } else {
-                // Seconds
-                Utc.timestamp_opt(ms, 0).single().unwrap_or_else(Utc::now)
+                Utc.timestamp_opt(ms, 0)
+                    .single()
+                    .unwrap_or_else(Utc::now)
             }
         })
     }
 }
 
-/// Locate Cursor workspace storage directories.
+/// Locate VS Code workspace storage directories.
 pub fn find_workspace_storage_dirs() -> Vec<PathBuf> {
-    let base = cursor_storage_base();
+    let base = vscode_storage_base();
     match base {
         Some(b) if b.exists() => {
             let mut dirs: Vec<PathBuf> = std::fs::read_dir(&b)
@@ -116,7 +144,6 @@ pub fn find_workspace_storage_dirs() -> Vec<PathBuf> {
                 .filter_map(|e| e.ok().map(|e| e.path()))
                 .filter(|p| p.join("state.vscdb").exists())
                 .collect();
-            // Sort by most recently modified state.vscdb
             dirs.sort_by_key(|d| {
                 std::fs::metadata(d.join("state.vscdb"))
                     .and_then(|m| m.modified())
@@ -129,21 +156,21 @@ pub fn find_workspace_storage_dirs() -> Vec<PathBuf> {
     }
 }
 
-fn cursor_storage_base() -> Option<PathBuf> {
+fn vscode_storage_base() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     // macOS
-    let macos = home.join("Library/Application Support/Cursor/User/workspaceStorage");
+    let macos = home.join("Library/Application Support/Code/User/workspaceStorage");
     if macos.exists() {
         return Some(macos);
     }
     // Linux
-    let linux = home.join(".config/Cursor/User/workspaceStorage");
+    let linux = home.join(".config/Code/User/workspaceStorage");
     if linux.exists() {
         return Some(linux);
     }
     // Windows
     if let Ok(appdata) = std::env::var("APPDATA") {
-        let win = PathBuf::from(appdata).join("Cursor/User/workspaceStorage");
+        let win = PathBuf::from(appdata).join("Code/User/workspaceStorage");
         if win.exists() {
             return Some(win);
         }
@@ -151,73 +178,16 @@ fn cursor_storage_base() -> Option<PathBuf> {
     None
 }
 
-/// Read all Cursor chat sessions from a workspace state.vscdb.
-/// Tries both the `cursorDiskKV` table (newer Cursor versions with composerData keys)
-/// and the `ItemTable` (older versions with chatData keys).
-pub fn read_chat_sessions(db_path: &Path) -> Vec<CursorChatSession> {
+/// Read all Copilot chat sessions from a workspace state.vscdb.
+pub fn read_chat_sessions(db_path: &Path) -> Vec<CopilotChatSession> {
     let conn = match Connection::open(db_path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[cursor] Cannot open {}: {}", db_path.display(), e);
+            eprintln!("[copilot] Cannot open {}: {}", db_path.display(), e);
             return vec![];
         }
     };
 
-    let mut sessions: Vec<CursorChatSession> = Vec::new();
-
-    // Try cursorDiskKV table first (newer Cursor versions)
-    sessions.extend(read_from_cursor_disk_kv(&conn));
-
-    // Also try ItemTable (older versions / additional data)
-    sessions.extend(read_from_item_table(&conn));
-
-    sessions
-}
-
-/// Read sessions from the cursorDiskKV table (newer Cursor versions).
-/// Keys follow the pattern `composerData:{conversation_id}`.
-fn read_from_cursor_disk_kv(conn: &Connection) -> Vec<CursorChatSession> {
-    let has_table: bool = conn
-        .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='cursorDiskKV'",
-            [],
-            |r| r.get::<_, i32>(0),
-        )
-        .unwrap_or(0)
-        > 0;
-
-    if !has_table {
-        return vec![];
-    }
-
-    let mut sessions = Vec::new();
-    let mut found_keys: Vec<String> = Vec::new();
-
-    // Query for composerData keys
-    let mut stmt = match conn.prepare(
-        "SELECT value FROM cursorDiskKV WHERE key LIKE 'composerData:%'",
-    ) {
-        Ok(s) => s,
-        Err(_) => return sessions,
-    };
-    let rows = stmt.query_map([], |r| r.get::<_, String>(0));
-    if let Ok(rows) = rows {
-        for row in rows.flatten() {
-            found_keys.push(row);
-        }
-    }
-
-    for value in found_keys {
-        if let Some(parsed) = parse_cursor_chat_json(&value) {
-            sessions.extend(parsed);
-        }
-    }
-
-    sessions
-}
-
-/// Read sessions from the ItemTable (legacy Cursor versions).
-fn read_from_item_table(conn: &Connection) -> Vec<CursorChatSession> {
     let has_table: bool = conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='ItemTable'",
@@ -231,15 +201,15 @@ fn read_from_item_table(conn: &Connection) -> Vec<CursorChatSession> {
         return vec![];
     }
 
+    // Known Copilot Chat storage keys
     let known_key_patterns = &[
-        "workbench.panel.aichat.view.aichat.chatData",
-        "aichat.chatData",
-        "composerChatData",
-        "anysphere.cursorpilot/aichat/chatData",
-        "composer.chatData",
+        "github.copilot-chat.chatData",
+        "github.copilot.chat.chatData",
+        "copilot-chat.chatData",
+        "interactiveSession.chatData",
     ];
 
-    let mut sessions: Vec<CursorChatSession> = Vec::new();
+    let mut sessions: Vec<CopilotChatSession> = Vec::new();
     let mut found_keys: Vec<String> = Vec::new();
 
     for &key in known_key_patterns {
@@ -252,10 +222,11 @@ fn read_from_item_table(conn: &Connection) -> Vec<CursorChatSession> {
         }
     }
 
+    // Fallback: scan for any key with "copilot" in the name
     if found_keys.is_empty() {
-        let mut stmt = match conn
-            .prepare("SELECT value FROM ItemTable WHERE key LIKE '%chat%' OR key LIKE '%Chat%'")
-        {
+        let mut stmt = match conn.prepare(
+            "SELECT value FROM ItemTable WHERE key LIKE '%copilot%' OR key LIKE '%Copilot%'",
+        ) {
             Ok(s) => s,
             Err(_) => return sessions,
         };
@@ -268,7 +239,7 @@ fn read_from_item_table(conn: &Connection) -> Vec<CursorChatSession> {
     }
 
     for value in found_keys {
-        if let Some(parsed) = parse_cursor_chat_json(&value) {
+        if let Some(parsed) = parse_copilot_chat_json(&value) {
             sessions.extend(parsed);
         }
     }
@@ -276,16 +247,75 @@ fn read_from_item_table(conn: &Connection) -> Vec<CursorChatSession> {
     sessions
 }
 
-fn parse_cursor_chat_json(json: &str) -> Option<Vec<CursorChatSession>> {
-    let root: CursorChatRoot = serde_json::from_str(json).ok()?;
+fn parse_copilot_chat_json(json: &str) -> Option<Vec<CopilotChatSession>> {
+    let root: CopilotChatRoot = serde_json::from_str(json).ok()?;
     let mut sessions = Vec::new();
 
+    // Try threads format first (newer Copilot Chat)
+    for thread in root.threads {
+        if thread.turns.is_empty() {
+            continue;
+        }
+
+        let model = thread
+            .turns
+            .iter()
+            .rev()
+            .find(|t| !t.model.is_empty())
+            .map(|t| t.model.clone())
+            .unwrap_or_else(|| "gpt-4o".to_string());
+
+        let timestamp = thread
+            .created_at
+            .and_then(|ms| {
+                if ms > 1_000_000_000_000 {
+                    Utc.timestamp_millis_opt(ms).single()
+                } else {
+                    Utc.timestamp_opt(ms, 0).single()
+                }
+            })
+            .unwrap_or_else(Utc::now);
+
+        let mut messages = Vec::new();
+        for turn in thread.turns {
+            let ts = turn.timestamp.and_then(|ms| {
+                if ms > 1_000_000_000_000 {
+                    Utc.timestamp_millis_opt(ms).single()
+                } else {
+                    Utc.timestamp_opt(ms, 0).single()
+                }
+            });
+            if !turn.request.is_empty() {
+                messages.push(CopilotMessage {
+                    role: "user".to_string(),
+                    text: turn.request,
+                    timestamp: ts,
+                });
+            }
+            if !turn.response.is_empty() {
+                messages.push(CopilotMessage {
+                    role: "assistant".to_string(),
+                    text: turn.response,
+                    timestamp: ts,
+                });
+            }
+        }
+
+        sessions.push(CopilotChatSession {
+            session_id: thread.id,
+            title: thread.title,
+            model,
+            messages,
+            timestamp,
+        });
+    }
+
+    // Fallback: tabs format (similar to Cursor)
     for tab in root.tabs {
         if tab.conversation.is_empty() {
             continue;
         }
 
-        // Extract model from last AI message
         let model = tab
             .conversation
             .iter()
@@ -293,7 +323,7 @@ fn parse_cursor_chat_json(json: &str) -> Option<Vec<CursorChatSession>> {
             .find(|e| e.effective_role() == "assistant")
             .map(|e| e.model.as_str())
             .filter(|m| !m.is_empty())
-            .unwrap_or("cursor")
+            .unwrap_or("gpt-4o")
             .to_string();
 
         let timestamp = tab
@@ -307,18 +337,18 @@ fn parse_cursor_chat_json(json: &str) -> Option<Vec<CursorChatSession>> {
             })
             .unwrap_or_else(Utc::now);
 
-        let messages: Vec<CursorMessage> = tab
+        let messages: Vec<CopilotMessage> = tab
             .conversation
             .into_iter()
             .filter(|e| !e.effective_text().trim().is_empty())
-            .map(|e| CursorMessage {
+            .map(|e| CopilotMessage {
                 role: e.effective_role(),
                 text: e.effective_text().to_string(),
                 timestamp: e.effective_timestamp(),
             })
             .collect();
 
-        sessions.push(CursorChatSession {
+        sessions.push(CopilotChatSession {
             session_id: tab.tab_id,
             title: tab.chat_title,
             model,
@@ -334,9 +364,8 @@ fn parse_cursor_chat_json(json: &str) -> Option<Vec<CursorChatSession>> {
     }
 }
 
-/// Find the workspace storage directory for the current git repo.
+/// Find the VS Code workspace storage directory for the current git repo.
 pub fn find_db_for_current_workspace() -> Option<PathBuf> {
-    // Get the workspace root (git root or cwd)
     let workspace_path = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .output()
@@ -350,14 +379,10 @@ pub fn find_db_for_current_workspace() -> Option<PathBuf> {
                 .unwrap_or_default()
         });
 
-    // Cursor hashes the workspace path to create the storage dir name
-    // We check all dirs and look for one containing a .vscode/state.vscdb
-    // with a reference to our workspace path, or just use the most recently modified
     let all = find_workspace_storage_dirs();
     for dir in &all {
         let db = dir.join("state.vscdb");
         if let Ok(conn) = Connection::open(&db) {
-            // Check if this workspace matches our path
             let found: bool = conn
                 .query_row(
                     "SELECT count(*) FROM ItemTable WHERE key = 'workspaceFolders' AND value LIKE ?1",
@@ -372,14 +397,12 @@ pub fn find_db_for_current_workspace() -> Option<PathBuf> {
         }
     }
 
-    // Fallback: most recently modified
     all.into_iter().next().map(|d| d.join("state.vscdb"))
 }
 
-/// Main entry point: scan Cursor workspace and create receipts.
-pub fn run_record_cursor(workspace: Option<&str>) {
+/// Main entry point: scan VS Code workspace for Copilot Chat sessions and create receipts.
+pub fn run_record_copilot(workspace: Option<&str>) {
     let db_path = if let Some(w) = workspace {
-        // User specified a workspace storage dir or .vscdb path directly
         let p = PathBuf::from(w);
         if p.extension().is_some_and(|e| e == "vscdb") {
             p
@@ -390,22 +413,27 @@ pub fn run_record_cursor(workspace: Option<&str>) {
         match find_db_for_current_workspace() {
             Some(p) => p,
             None => {
-                eprintln!("[cursor] Cannot find Cursor workspace storage.");
-                eprintln!("  Pass --workspace <path/to/state.vscdb> to specify the database.");
+                eprintln!("[copilot] Cannot find VS Code workspace storage.");
+                eprintln!(
+                    "  Pass --workspace <path/to/state.vscdb> to specify the database."
+                );
                 std::process::exit(1);
             }
         }
     };
 
     if !db_path.exists() {
-        eprintln!("[cursor] Database not found: {}", db_path.display());
+        eprintln!("[copilot] Database not found: {}", db_path.display());
         std::process::exit(1);
     }
 
     let sessions = read_chat_sessions(&db_path);
     if sessions.is_empty() {
-        eprintln!("[cursor] No AI chat sessions found in {}", db_path.display());
-        eprintln!("  Make sure you have used Cursor's AI features in this workspace.");
+        eprintln!(
+            "[copilot] No Copilot Chat sessions found in {}",
+            db_path.display()
+        );
+        eprintln!("  Make sure you have used GitHub Copilot Chat in this workspace.");
         return;
     }
 
@@ -413,11 +441,9 @@ pub fn run_record_cursor(workspace: Option<&str>) {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
-
     let user = util::git_user();
     let mut count = 0usize;
 
-    // Find files that have been recently modified in git (possible AI-changed files)
     let changed_files = get_recent_changed_files();
 
     for session in &sessions {
@@ -454,14 +480,19 @@ pub fn run_record_cursor(workspace: Option<&str>) {
 
         let receipt = Receipt {
             id: Receipt::new_id(),
-            provider: "cursor".to_string(),
+            provider: "copilot".to_string(),
             model: session.model.clone(),
             session_id: session.session_id.clone(),
             prompt_summary,
-            response_summary: None,
+            response_summary: session
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "assistant")
+                .map(|m| m.text.chars().take(500).collect()),
             prompt_hash,
             message_count: session.messages.len() as u32,
-            cost_usd: 0.0, // Cursor doesn't expose cost
+            cost_usd: 0.0,
             input_tokens: None,
             output_tokens: None,
             cache_read_tokens: None,
@@ -503,14 +534,67 @@ pub fn run_record_cursor(workspace: Option<&str>) {
     }
 
     println!(
-        "[cursor] Recorded {} Cursor AI session(s) from {}",
+        "[copilot] Recorded {} Copilot Chat session(s) from {}",
         count,
         db_path.display()
     );
     println!("  Receipts staged. They will be attached on next git commit.");
 }
 
-/// Get files modified in the working tree or staged.
+/// Install blameprompt hooks for GitHub Copilot.
+/// Creates ~/.github/hooks/blameprompt.json with PreToolUse/PostToolUse hooks.
+pub fn install_hooks() -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    let hooks_dir = home.join(".github").join("hooks");
+
+    std::fs::create_dir_all(&hooks_dir)
+        .map_err(|e| format!("Cannot create {}: {}", hooks_dir.display(), e))?;
+
+    let hook_path = hooks_dir.join("blameprompt.json");
+
+    // Check if already installed
+    if hook_path.exists() {
+        let content = std::fs::read_to_string(&hook_path).unwrap_or_default();
+        if content.contains("blameprompt") {
+            println!(
+                "  BlamePrompt hooks already installed in {}",
+                hook_path.display()
+            );
+            return Ok(());
+        }
+    }
+
+    let binary = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "blameprompt".to_string());
+
+    let command = format!("{} checkpoint copilot --hook-input stdin", binary);
+
+    let hook_config = serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": "Write|Edit|MultiEdit",
+                "hooks": [{"type": "command", "command": command}]
+            }],
+            "PostToolUse": [{
+                "matcher": "Write|Edit|MultiEdit|Bash",
+                "hooks": [{"type": "command", "command": command}]
+            }]
+        }
+    });
+
+    let json_str = serde_json::to_string_pretty(&hook_config)
+        .map_err(|e| format!("Failed to serialize: {}", e))?;
+    std::fs::write(&hook_path, json_str)
+        .map_err(|e| format!("Cannot write {}: {}", hook_path.display(), e))?;
+
+    println!(
+        "  Installed BlamePrompt hooks in {}",
+        hook_path.display()
+    );
+    Ok(())
+}
+
 fn get_recent_changed_files() -> Vec<String> {
     let output = Command::new("git")
         .args(["diff", "--name-only", "HEAD"])
@@ -529,7 +613,6 @@ fn get_recent_changed_files() -> Vec<String> {
         }
     }
 
-    // Also check staged files
     let staged = Command::new("git")
         .args(["diff", "--cached", "--name-only"])
         .output()
@@ -548,116 +631,50 @@ fn get_recent_changed_files() -> Vec<String> {
     files
 }
 
-/// Install BlamePrompt hooks for Cursor IDE.
-/// Writes to ~/.cursor/hooks.json with event handlers for file edits.
-pub fn install_hooks() -> Result<(), String> {
-    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    let cursor_dir = home.join(".cursor");
-
-    if !cursor_dir.exists() {
-        return Err("Cursor IDE not found (~/.cursor/ does not exist)".to_string());
-    }
-
-    let hook_path = cursor_dir.join("hooks.json");
-
-    // Check if already installed
-    if hook_path.exists() {
-        let content = std::fs::read_to_string(&hook_path).unwrap_or_default();
-        if content.contains("blameprompt") {
-            println!(
-                "  BlamePrompt hooks already installed in {}",
-                hook_path.display()
-            );
-            return Ok(());
-        }
-    }
-
-    let binary = std::env::current_exe()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "blameprompt".to_string());
-
-    let command = format!("{} checkpoint cursor --hook-input stdin", binary);
-
-    let hook_config = serde_json::json!({
-        "hooks": {
-            "afterFileEdit": [{
-                "command": command,
-                "description": "BlamePrompt: record AI file edits"
-            }],
-            "beforeSubmitPrompt": [{
-                "command": format!("{} checkpoint cursor --hook-input stdin", binary),
-                "description": "BlamePrompt: capture prompt submission"
-            }]
-        }
-    });
-
-    let json_str = serde_json::to_string_pretty(&hook_config)
-        .map_err(|e| format!("Failed to serialize: {}", e))?;
-    std::fs::write(&hook_path, json_str)
-        .map_err(|e| format!("Cannot write {}: {}", hook_path.display(), e))?;
-
-    println!(
-        "  Installed BlamePrompt hooks in {}",
-        hook_path.display()
-    );
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_cursor_chat_json_empty_tabs() {
-        let json = r#"{"tabs":[]}"#;
-        let result = parse_cursor_chat_json(json);
+    fn test_parse_copilot_threads_format() {
+        let json = r#"{
+            "threads": [{
+                "id": "thread-1",
+                "title": "Fix login",
+                "createdAt": 1700000000000,
+                "turns": [
+                    {"role": "user", "request": "Fix the login bug", "response": "", "model": "", "timestamp": 1700000000000},
+                    {"role": "assistant", "request": "", "response": "I'll fix it", "model": "gpt-4o", "timestamp": 1700000001000}
+                ]
+            }],
+            "tabs": []
+        }"#;
+        let result = parse_copilot_chat_json(json);
+        assert!(result.is_some());
+        let sessions = result.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].title, "Fix login");
+        assert_eq!(sessions[0].model, "gpt-4o");
+        assert_eq!(sessions[0].messages.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_copilot_empty() {
+        let json = r#"{"threads":[],"tabs":[]}"#;
+        let result = parse_copilot_chat_json(json);
         assert!(result.is_none());
     }
 
     #[test]
-    fn test_parse_cursor_chat_json_with_session() {
-        let json = r#"{
-            "tabs": [{
-                "tabId": "tab1",
-                "chatTitle": "Fix bug",
-                "lastUpdatedAt": 1700000000000,
-                "conversation": [
-                    {"type": "human", "text": "Fix the login bug", "timestamp": 1700000000000},
-                    {"type": "ai", "text": "I'll fix it", "timestamp": 1700000001000, "model": "claude-3-5-sonnet-20241022"}
-                ]
-            }]
-        }"#;
-        let result = parse_cursor_chat_json(json);
-        assert!(result.is_some());
-        let sessions = result.unwrap();
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].title, "Fix bug");
-        assert_eq!(sessions[0].model, "claude-3-5-sonnet-20241022");
-        assert_eq!(sessions[0].messages.len(), 2);
-        assert_eq!(sessions[0].messages[0].role, "user");
-        assert_eq!(sessions[0].messages[1].role, "assistant");
-    }
-
-    #[test]
-    fn test_cursor_entry_effective_role() {
-        let entry = CursorChatEntry {
-            entry_type: "human".to_string(),
-            role: String::new(),
-            text: "hello".to_string(),
-            message: String::new(),
-            timestamp: None,
-            model: String::new(),
-        };
-        assert_eq!(entry.effective_role(), "user");
-
-        let ai_entry = CursorChatEntry {
-            entry_type: "ai".to_string(),
+    fn test_copilot_entry_effective_role() {
+        let entry = CopilotEntry {
+            entry_type: "copilot".to_string(),
             role: String::new(),
             text: "response".to_string(),
             message: String::new(),
             timestamp: None,
-            model: "claude".to_string(),
+            model: "gpt-4o".to_string(),
         };
-        assert_eq!(ai_entry.effective_role(), "assistant");
+        assert_eq!(entry.effective_role(), "assistant");
     }
 }

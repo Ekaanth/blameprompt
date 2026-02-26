@@ -1,4 +1,7 @@
-use crate::{git::hooks, git::wrap, integrations::claude_hooks};
+use crate::{
+    git::hooks, git::wrap,
+    integrations::{claude_hooks, codex, copilot, cursor, gemini, windsurf},
+};
 use std::path::Path;
 
 /// Marker file to track that global setup has been done.
@@ -21,6 +24,21 @@ fn mark_setup_done() {
     }
 }
 
+/// Try to install hooks for all detected AI agents.
+/// Failures are non-fatal — agents that aren't installed are silently skipped.
+fn install_all_agent_hooks() {
+    // Claude Code (always installed — it's our primary integration)
+    let _ = claude_hooks::install();
+
+    // Detect and install hooks for other agents if present
+    // Each returns Err if agent not installed — silently skip those
+    let _ = codex::install_hooks();
+    let _ = gemini::install_hooks();
+    let _ = copilot::install_hooks();
+    let _ = cursor::install_hooks();
+    let _ = windsurf::install_hooks();
+}
+
 /// Auto-setup: called on every blameprompt invocation.
 /// If global hooks are not installed, install them silently.
 pub fn auto_setup() {
@@ -28,10 +46,8 @@ pub fn auto_setup() {
         return;
     }
 
-    // Install Claude Code hooks (writes to ~/.claude/settings.json)
-    if claude_hooks::install().is_err() {
-        return; // Silently skip if we can't install Claude hooks
-    }
+    // Install hooks for all detected AI agents
+    install_all_agent_hooks();
 
     // Install git template (sets init.templateDir so every git init gets hooks)
     if install_git_template().is_err() {
@@ -89,6 +105,8 @@ fn print_install_banner(use_stderr: bool) {
         String::new(),
         format!("  {bg}[done]{r} Claude Code hooks installed (10 lifecycle hooks)"),
         format!("         {d}→ {home}/.claude/settings.json{r}"),
+        format!("  {bg}[done]{r} Multi-agent hooks installed (Codex, Gemini, Copilot, Cursor, Windsurf)"),
+        format!("         {d}→ detected agents configured automatically{r}"),
         format!("  {bg}[done]{r} Git template configured (7 git hooks)"),
         format!("         {d}→ {home}/.blameprompt/git-template{r}"),
         format!("  {bg}[done]{r} Transparent git wrapper installed"),
@@ -221,7 +239,7 @@ pub fn auto_init_blameprompt(repo_root: &str) -> Result<(), String> {
 pub fn run_init(global: bool) -> Result<(), String> {
     if global {
         install_git_template()?;
-        claude_hooks::install()?;
+        install_all_agent_hooks();
         // Install transparent git wrapper (optional; failure is non-fatal)
         let _ = wrap::install();
         mark_setup_done();

@@ -34,7 +34,10 @@ pub fn get_connection() -> Result<Connection, String> {
             file_path TEXT,
             line_start INTEGER,
             line_end INTEGER,
-            parent_receipt_id TEXT
+            parent_receipt_id TEXT,
+            parent_session_id TEXT,
+            is_continuation INTEGER,
+            continuation_depth INTEGER
         );",
     )
     .map_err(|e| format!("Cannot create table: {}", e))?;
@@ -44,7 +47,7 @@ pub fn get_connection() -> Result<Connection, String> {
 
 pub fn insert_receipt(conn: &Connection, commit_sha: &str, r: &Receipt) -> Result<(), String> {
     conn.execute(
-        "INSERT OR REPLACE INTO receipts (id, commit_sha, provider, model, session_id, prompt_summary, prompt_hash, message_count, cost_usd, timestamp, session_start, session_end, session_duration_secs, ai_response_time_secs, user, file_path, line_start, line_end, parent_receipt_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+        "INSERT OR REPLACE INTO receipts (id, commit_sha, provider, model, session_id, prompt_summary, prompt_hash, message_count, cost_usd, timestamp, session_start, session_end, session_duration_secs, ai_response_time_secs, user, file_path, line_start, line_end, parent_receipt_id, parent_session_id, is_continuation, continuation_depth) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
         params![
             r.id,
             commit_sha,
@@ -65,6 +68,9 @@ pub fn insert_receipt(conn: &Connection, commit_sha: &str, r: &Receipt) -> Resul
             r.line_range.0,
             r.line_range.1,
             r.parent_receipt_id,
+            r.parent_session_id,
+            r.is_continuation.map(|b| b as i32),
+            r.continuation_depth,
         ],
     ).map_err(|e| format!("Cannot insert receipt: {}", e))?;
 
@@ -105,7 +111,7 @@ pub fn search_prompts(query: &str, limit: usize) -> Result<Vec<(String, Receipt)
     let conn = get_connection()?;
 
     let mut stmt = conn.prepare(
-        "SELECT commit_sha, id, provider, model, session_id, prompt_summary, prompt_hash, message_count, cost_usd, timestamp, session_start, session_end, session_duration_secs, ai_response_time_secs, user, file_path, line_start, line_end, parent_receipt_id FROM receipts WHERE prompt_summary LIKE ?1 OR file_path LIKE ?1 OR model LIKE ?1 ORDER BY timestamp DESC LIMIT ?2"
+        "SELECT commit_sha, id, provider, model, session_id, prompt_summary, prompt_hash, message_count, cost_usd, timestamp, session_start, session_end, session_duration_secs, ai_response_time_secs, user, file_path, line_start, line_end, parent_receipt_id, parent_session_id, is_continuation, continuation_depth FROM receipts WHERE prompt_summary LIKE ?1 OR file_path LIKE ?1 OR model LIKE ?1 ORDER BY timestamp DESC LIMIT ?2"
     ).map_err(|e| format!("Query error: {}", e))?;
 
     let pattern = format!("%{}%", query);
@@ -142,9 +148,14 @@ pub fn search_prompts(query: &str, limit: usize) -> Result<Vec<(String, Receipt)
                     model: row.get(3)?,
                     session_id: row.get(4)?,
                     prompt_summary: row.get(5)?,
+                    response_summary: None,
                     prompt_hash: row.get(6)?,
                     message_count: row.get(7)?,
                     cost_usd: row.get(8)?,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_read_tokens: None,
+                    cache_creation_tokens: None,
                     timestamp,
                     session_start,
                     session_end,
@@ -154,12 +165,18 @@ pub fn search_prompts(query: &str, limit: usize) -> Result<Vec<(String, Receipt)
                     file_path: row.get(15)?,
                     line_range: (line_start, line_end),
                     parent_receipt_id: row.get(18)?,
+                    parent_session_id: row.get(19)?,
+                    is_continuation: row.get::<_, Option<i32>>(20)?.map(|v| v != 0),
+                    continuation_depth: row.get(21)?,
                     prompt_number: None,
                     total_additions: 0,
                     total_deletions: 0,
                     tools_used: vec![],
                     mcp_servers: vec![],
                     agents_spawned: vec![],
+                    subagent_activities: vec![],
+                    concurrent_tool_calls: None,
+                    user_decisions: vec![],
                     files_changed: vec![], // SQLite cache uses legacy file_path/line_range
                     conversation: None,    // SQLite cache doesn't store conversation turns
                     prompt_submitted_at: None,

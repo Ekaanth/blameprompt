@@ -116,9 +116,11 @@ fn normalize_model_id(provider: &str, model: &str) -> String {
     let provider_lower = provider.to_lowercase();
     let p = match provider_lower.as_str() {
         "claude" | "anthropic" => "anthropic",
-        "openai" | "gpt" => "openai",
+        "openai" | "gpt" | "codex" => "openai",
         "cursor" => "cursor",
         "copilot" | "github" => "github",
+        "gemini" | "google" => "google",
+        "windsurf" | "codeium" => "codeium",
         other => other,
     };
     format!("{}/{}", p, model)
@@ -258,6 +260,10 @@ mod tests {
         assert_eq!(normalize_model_id("claude", "claude-sonnet-4-6"), "anthropic/claude-sonnet-4-6");
         assert_eq!(normalize_model_id("openai", "gpt-4o"), "openai/gpt-4o");
         assert_eq!(normalize_model_id("cursor", "claude-3-5-sonnet"), "cursor/claude-3-5-sonnet");
+        assert_eq!(normalize_model_id("codex", "gpt-4.1"), "openai/gpt-4.1");
+        assert_eq!(normalize_model_id("gemini", "gemini-2.5-pro"), "google/gemini-2.5-pro");
+        assert_eq!(normalize_model_id("windsurf", "claude-3-5-sonnet"), "codeium/claude-3-5-sonnet");
+        assert_eq!(normalize_model_id("copilot", "gpt-4o"), "github/gpt-4o");
         // Already namespaced — pass through
         assert_eq!(normalize_model_id("anthropic", "anthropic/claude-3"), "anthropic/claude-3");
     }

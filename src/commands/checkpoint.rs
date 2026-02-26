@@ -1,17 +1,31 @@
 use crate::commands::staging;
 use crate::core::{
     config, pricing,
-    receipt::{FileChange, Receipt},
+    receipt::{DecisionOption, FileChange, Receipt, SubagentActivity, UserDecision},
     redact, transcript, util,
 };
+use crate::git::notes;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::Path;
-use transcript::{extract_agents_spawned, extract_mcp_servers, extract_tools_used};
+use transcript::{
+    count_concurrent_tools, extract_agents_for_prompt, extract_mcps_for_prompt,
+    extract_tools_for_prompt, token_usage_for_prompt,
+};
 
 #[derive(Debug)]
 struct HookInput {
+    /// Session ID from the hook payload (present in all events).
+    session_id: Option<String>,
+    /// Parent session ID if Claude Code provides it (future-proof for continuations).
+    parent_session_id: Option<String>,
+    /// Agent ID from SubagentStart/SubagentStop events.
+    agent_id: Option<String>,
+    /// Agent type from SubagentStart/SubagentStop events (e.g., "Explore", "Plan").
+    agent_type: Option<String>,
+    /// Path to the subagent's transcript (SubagentStop event).
+    agent_transcript_path: Option<String>,
     transcript_path: Option<String>,
     cwd: Option<String>,
     hook_event_name: Option<String>,
@@ -21,6 +35,13 @@ struct HookInput {
     /// All file paths touched by this tool call.
     /// Write/Edit produce one entry; MultiEdit produces one per edit in the edits array.
     file_paths: Vec<String>,
+    /// The AI's final response text (Stop and SubagentStop events).
+    last_assistant_message: Option<String>,
+    /// Tool execution result (PostToolUse event). Reserved for future use.
+    #[allow(dead_code)]
+    tool_response: Option<serde_json::Value>,
+    /// Raw tool_input JSON from PostToolUse. Used to parse AskUserQuestion questions.
+    tool_input: Option<serde_json::Value>,
 }
 
 fn parse_hook_input(json_str: &str) -> HookInput {
@@ -52,6 +73,26 @@ fn parse_hook_input(json_str: &str) -> HookInput {
     };
 
     HookInput {
+        session_id: v
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        parent_session_id: v
+            .get("parent_session_id")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        agent_id: v
+            .get("agent_id")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        agent_type: v
+            .get("agent_type")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        agent_transcript_path: v
+            .get("agent_transcript_path")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         transcript_path: v
             .get("transcript_path")
             .and_then(|v| v.as_str())
@@ -70,6 +111,12 @@ fn parse_hook_input(json_str: &str) -> HookInput {
             .and_then(|v| v.as_str())
             .map(String::from),
         file_paths,
+        last_assistant_message: v
+            .get("last_assistant_message")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        tool_response: v.get("tool_response").cloned(),
+        tool_input: tool_input.cloned(),
     }
 }
 
@@ -233,14 +280,26 @@ pub fn run(agent: &str, hook_input_source: &str) {
             handle_user_prompt_submit(agent, &input);
         }
         Some("PostToolUse") => {
-            if let Some("Write" | "Edit" | "MultiEdit") = input.tool_name.as_deref() {
-                handle_file_change(agent, &input);
+            match input.tool_name.as_deref() {
+                Some("Write" | "Edit" | "MultiEdit") => {
+                    handle_file_change(agent, &input);
+                }
+                Some("AskUserQuestion") => {
+                    handle_ask_user_question(&input);
+                }
+                _ => {}
             }
         }
         Some("Stop") => {
             // Finalizes the current prompt's receipt with conversation, tools, and cost.
             // Also creates receipts for any older prompts still missing one.
             handle_stop(agent, &input);
+        }
+        Some("SubagentStart") => {
+            handle_subagent_start(&input);
+        }
+        Some("SubagentStop") => {
+            handle_subagent_stop(&input);
         }
         _ => {} // skip all other events
     }
@@ -253,7 +312,6 @@ struct TranscriptContext {
     cfg: config::BlamePromptConfig,
     model: String,
     prompt_hash: String,
-    cost: f64,
     user: String,
     message_count: u32,
 }
@@ -274,18 +332,6 @@ fn build_context(input: &HookInput) -> Option<TranscriptContext> {
     hasher.update(full_text.as_bytes());
     let prompt_hash = format!("sha256:{:x}", hasher.finalize());
 
-    let total_chars: usize = parsed
-        .transcript
-        .messages
-        .iter()
-        .map(|m| match m {
-            transcript::Message::User { text, .. } => text.len(),
-            transcript::Message::Assistant { text, .. } => text.len(),
-            transcript::Message::ToolUse { .. } => 0,
-        })
-        .sum();
-    let estimated_tokens = pricing::estimate_tokens_from_chars(total_chars);
-    let cost = pricing::estimate_cost(&model, estimated_tokens / 2, estimated_tokens / 2);
     let user = util::git_user();
     let message_count = parsed.transcript.messages.len() as u32;
 
@@ -295,10 +341,109 @@ fn build_context(input: &HookInput) -> Option<TranscriptContext> {
         cfg,
         model,
         prompt_hash,
-        cost,
         user,
         message_count,
     })
+}
+
+/// Compute per-prompt cost and token usage.
+///
+/// Uses `token_usage_for_prompt()` to sum only the assistant messages within the prompt's
+/// message slice, avoiding the cumulative full-session totals that inflate costs.
+/// Falls back to the full-session context values if per-prompt data isn't available.
+fn prompt_cost_and_tokens(
+    ctx: &TranscriptContext,
+    prompt_number: u32,
+) -> (f64, Option<transcript::TokenUsage>) {
+    if let Some(usage) = token_usage_for_prompt(&ctx.parsed.transcript, prompt_number) {
+        let cost = pricing::cost_from_usage(
+            &ctx.model,
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_tokens,
+            usage.cache_creation_tokens,
+        );
+        (cost, Some(usage))
+    } else {
+        // No per-prompt usage data — fall back to char-based estimate for this prompt's slice
+        (0.0, None)
+    }
+}
+
+/// Prefix that Claude Code uses when continuing from a prior session that exhausted its context.
+const CONTINUATION_MARKER: &str =
+    "This session is being continued from a previous conversation";
+
+/// Detect whether a prompt is a session continuation and resolve the parent session ID.
+///
+/// Resolution priority:
+/// 1. `parent_session_id` from hook payload (future Claude Code feature)
+/// 2. Prompt text starts with the continuation marker — look up the most recent session
+///    in staging.json, then fall back to scanning recent git notes.
+///
+/// Returns `(parent_session_id, continuation_depth)`.
+fn detect_continuation(input: &HookInput, cwd: &str) -> (Option<String>, u32) {
+    // Priority 1: Claude Code provides parent_session_id directly in hook payload
+    if let Some(ref psid) = input.parent_session_id {
+        let depth = find_depth_for_session(psid, cwd) + 1;
+        return (Some(psid.clone()), depth);
+    }
+
+    // Priority 2: Detect from prompt text
+    let prompt = input.prompt.as_deref().unwrap_or("");
+    if !prompt.starts_with(CONTINUATION_MARKER) {
+        return (None, 0);
+    }
+
+    // Find the most recent session in staging.json
+    let staging_data = staging::read_staging_in(Path::new(cwd));
+    if let Some(last_receipt) = staging_data.receipts.last() {
+        // Only link if the last receipt is from a different session (not the same one)
+        let current_sid = input.session_id.as_deref().unwrap_or("");
+        if last_receipt.session_id != current_sid {
+            let parent_sid = last_receipt.session_id.clone();
+            let depth = last_receipt.continuation_depth.unwrap_or(0) + 1;
+            return (Some(parent_sid), depth);
+        }
+    }
+
+    // Staging is empty or same session — scan recent git notes for the parent
+    if let Some((parent_sid, parent_depth)) = find_most_recent_session_from_notes(
+        input.session_id.as_deref().unwrap_or(""),
+    ) {
+        return (Some(parent_sid), parent_depth + 1);
+    }
+
+    // We know it's a continuation but can't find the parent
+    (None, 1)
+}
+
+/// Walk staging to find the continuation depth of a given session ID.
+fn find_depth_for_session(session_id: &str, cwd: &str) -> u32 {
+    let staging_data = staging::read_staging_in(Path::new(cwd));
+    for r in staging_data.receipts.iter().rev() {
+        if r.session_id == session_id {
+            return r.continuation_depth.unwrap_or(0);
+        }
+    }
+    0
+}
+
+/// Scan recent git commits for the most recent session_id stored in blameprompt notes.
+/// Skips receipts matching `current_session_id` to avoid self-linking.
+fn find_most_recent_session_from_notes(current_session_id: &str) -> Option<(String, u32)> {
+    let commits = notes::list_commits_with_notes();
+    for sha in commits.iter().take(10) {
+        if let Some(payload) = notes::read_receipts_for_commit(sha) {
+            // Walk receipts in reverse to find the most recent one from a different session
+            for r in payload.receipts.iter().rev() {
+                if r.session_id != current_session_id {
+                    return Some((r.session_id.clone(), r.continuation_depth.unwrap_or(0)));
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Handle UserPromptSubmit — fires the instant the user submits a prompt, before Claude responds.
@@ -306,39 +451,75 @@ fn build_context(input: &HookInput) -> Option<TranscriptContext> {
 /// Creates an initial "in-progress" receipt immediately so the prompt is visible in
 /// staging.json in real-time. PostToolUse and Stop events will upsert-merge into this
 /// receipt, progressively adding file changes, tools, conversation, and cost.
+///
+/// **Race condition fix**: If the transcript hasn't been updated yet (common when Claude Code
+/// fires this hook before flushing the JSONL), we fall back to creating the receipt from the
+/// hook payload alone (session_id, prompt text, cwd).
 fn handle_user_prompt_submit(agent: &str, input: &HookInput) {
-    let ctx = match build_context(input) {
-        Some(c) => c,
-        None => return,
-    };
+    let cwd = input.cwd.clone().unwrap_or_else(|| ".".to_string());
+    let cfg = config::load_config();
 
-    // At UserPromptSubmit time the transcript already contains the new user message.
-    let prompt_number = transcript::count_user_prompts(&ctx.parsed.transcript);
-    if prompt_number == 0 {
-        return;
-    }
-
-    // At submit time the assistant hasn't replied yet, so model_for_prompt returns None.
-    // Use the most recent model seen anywhere in the transcript as the best available estimate.
-    // The Stop handler will overwrite with the confirmed model once the response is complete.
-    let model = transcript::model_for_prompt(&ctx.parsed.transcript, prompt_number)
-        .unwrap_or(ctx.model.clone());
+    // Try to build full transcript context; if it fails or has 0 prompts, fall back.
+    let (prompt_number, model, session_id, prompt_hash, session_start, message_count) =
+        if let Some(ctx) = build_context(input) {
+            let count = transcript::count_user_prompts(&ctx.parsed.transcript);
+            if count == 0 {
+                // Transcript doesn't have the user message yet — fall back to payload-only.
+                let sid = input
+                    .session_id
+                    .clone()
+                    .unwrap_or_else(|| ctx.parsed.session_id.clone());
+                (1u32, ctx.model, sid, ctx.prompt_hash, ctx.parsed.session_start, ctx.message_count)
+            } else {
+                // UserPromptSubmit fires BEFORE Claude Code writes the user message to
+                // the JSONL transcript. So count_user_prompts returns the count of PREVIOUS
+                // prompts, not including this one. We need count + 1.
+                //
+                // Safety check: if the transcript's last user message matches the hook's
+                // prompt text, the JSONL was already updated (rare) and count is correct.
+                let hook_prompt = input.prompt.as_deref().unwrap_or("");
+                let pn = if !hook_prompt.is_empty() {
+                    let last = transcript::nth_user_prompt(&ctx.parsed.transcript, count)
+                        .unwrap_or_default();
+                    let prefix_len = 80.min(hook_prompt.len()).min(last.len());
+                    if prefix_len > 0
+                        && hook_prompt.chars().take(80).collect::<String>()
+                            == last.chars().take(80).collect::<String>()
+                    {
+                        count // Transcript already has this prompt (rare)
+                    } else {
+                        count + 1 // Normal: transcript not yet updated
+                    }
+                } else {
+                    count + 1
+                };
+                let m = transcript::model_for_prompt(&ctx.parsed.transcript, pn)
+                    .unwrap_or(ctx.model.clone());
+                (pn, m, ctx.parsed.session_id, ctx.prompt_hash, ctx.parsed.session_start, ctx.message_count)
+            }
+        } else {
+            // Transcript file not readable — create receipt from hook payload alone.
+            let sid = input
+                .session_id
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            let hash = {
+                let mut hasher = Sha256::new();
+                hasher.update(input.prompt.as_deref().unwrap_or("").as_bytes());
+                format!("sha256:{:x}", hasher.finalize())
+            };
+            (1u32, "unknown".to_string(), sid, hash, None, 0u32)
+        };
 
     // Use the prompt text from the hook payload when available (cleaner, no truncation),
     // otherwise fall back to parsing the transcript.
     let prompt_summary = input
         .prompt
         .as_deref()
+        .filter(|p| !p.is_empty())
         .map(|p| {
-            let truncated: String = p.chars().take(ctx.cfg.capture.max_prompt_length).collect();
-            redact::redact_secrets_with_config(&truncated, &ctx.cfg)
-        })
-        .or_else(|| {
-            transcript::last_user_prompt(&ctx.parsed.transcript).map(|p| {
-                let truncated: String =
-                    p.chars().take(ctx.cfg.capture.max_prompt_length).collect();
-                redact::redact_secrets_with_config(&truncated, &ctx.cfg)
-            })
+            let truncated: String = p.chars().take(cfg.capture.max_prompt_length).collect();
+            redact::redact_secrets_with_config(&truncated, &cfg)
         })
         .unwrap_or_default();
 
@@ -346,17 +527,32 @@ fn handle_user_prompt_submit(agent: &str, input: &HookInput) {
         return;
     }
 
+    let user = util::git_user();
+
+    // Detect session continuation (context exhaustion → new session)
+    let (parent_session_id, continuation_depth) = detect_continuation(input, &cwd);
+    let is_continuation = if parent_session_id.is_some() || continuation_depth > 0 {
+        Some(true)
+    } else {
+        None
+    };
+
     let receipt = Receipt {
         id: Receipt::new_id(),
         provider: agent.to_string(),
         model,
-        session_id: ctx.parsed.session_id,
+        session_id,
         prompt_summary,
-        prompt_hash: ctx.prompt_hash,
-        message_count: ctx.message_count,
+        response_summary: None, // Populated at Stop time from last_assistant_message
+        prompt_hash,
+        message_count,
         cost_usd: 0.0, // Not known yet; Stop will fill this in
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        cache_creation_tokens: None,
         timestamp: Utc::now(),
-        session_start: ctx.parsed.session_start,
+        session_start,
         session_end: None, // Session not finished yet
         session_duration_secs: None,
         ai_response_time_secs: None,
@@ -364,21 +560,27 @@ fn handle_user_prompt_submit(agent: &str, input: &HookInput) {
         prompt_duration_secs: None,            // Computed at Stop time
         accepted_lines: None,
         overridden_lines: None,
-        user: ctx.user,
+        user,
         file_path: String::new(),
         line_range: (0, 0),
         files_changed: vec![],
         parent_receipt_id: None,
+        parent_session_id,
+        is_continuation,
+        continuation_depth: if continuation_depth > 0 { Some(continuation_depth) } else { None },
         prompt_number: Some(prompt_number),
         total_additions: 0,
         total_deletions: 0,
         tools_used: vec![],
         mcp_servers: vec![],
         agents_spawned: vec![],
+        subagent_activities: vec![],
+        concurrent_tool_calls: None,
+        user_decisions: vec![],
         conversation: None, // Conversation populated at Stop time
     };
 
-    staging::upsert_receipt_in(&receipt, &ctx.cwd);
+    staging::upsert_receipt_in(&receipt, &cwd);
 }
 
 /// Handle PostToolUse for Write/Edit/MultiEdit — creates a receipt with file changes.
@@ -439,12 +641,17 @@ fn handle_file_change(agent: &str, input: &HookInput) {
         return;
     }
 
-    let prompt_summary = transcript::last_user_prompt(&ctx.parsed.transcript)
+    // Use nth_user_prompt (not last_user_prompt) so the summary matches THIS prompt,
+    // even if the transcript already contains a newer prompt by the time PostToolUse fires.
+    let prompt_summary = transcript::nth_user_prompt(&ctx.parsed.transcript, prompt_number)
         .map(|p| {
             let truncated: String = p.chars().take(ctx.cfg.capture.max_prompt_length).collect();
             redact::redact_secrets_with_config(&truncated, &ctx.cfg)
         })
         .unwrap_or_default();
+
+    // Per-prompt cost/tokens — avoids the cumulative full-session totals
+    let (prompt_cost, prompt_tokens) = prompt_cost_and_tokens(&ctx, prompt_number);
 
     let receipt = Receipt {
         id: Receipt::new_id(),
@@ -452,9 +659,14 @@ fn handle_file_change(agent: &str, input: &HookInput) {
         model,
         session_id: ctx.parsed.session_id,
         prompt_summary,
+        response_summary: None, // Populated at Stop time
         prompt_hash: ctx.prompt_hash,
         message_count: ctx.message_count,
-        cost_usd: ctx.cost,
+        cost_usd: prompt_cost,
+        input_tokens: prompt_tokens.as_ref().map(|u| u.input_tokens),
+        output_tokens: prompt_tokens.as_ref().map(|u| u.output_tokens),
+        cache_read_tokens: prompt_tokens.as_ref().map(|u| u.cache_read_tokens),
+        cache_creation_tokens: prompt_tokens.as_ref().map(|u| u.cache_creation_tokens),
         timestamp: Utc::now(),
         session_start: ctx.parsed.session_start,
         session_end: ctx.parsed.session_end,
@@ -477,10 +689,16 @@ fn handle_file_change(agent: &str, input: &HookInput) {
         total_deletions: files_changed.iter().map(|f| f.deletions).sum(),
         files_changed,
         parent_receipt_id: None,
+        parent_session_id: None,
+        is_continuation: None,
+        continuation_depth: None,
         prompt_number: Some(prompt_number),
-        tools_used: extract_tools_used(&ctx.parsed.transcript),
-        mcp_servers: extract_mcp_servers(&ctx.parsed.transcript),
-        agents_spawned: extract_agents_spawned(&ctx.parsed.transcript),
+        tools_used: extract_tools_for_prompt(&ctx.parsed.transcript, prompt_number),
+        mcp_servers: extract_mcps_for_prompt(&ctx.parsed.transcript, prompt_number),
+        agents_spawned: extract_agents_for_prompt(&ctx.parsed.transcript, prompt_number),
+        subagent_activities: vec![],
+        concurrent_tool_calls: None,
+        user_decisions: vec![],
         conversation: if conversation_turns.is_empty() {
             None
         } else {
@@ -489,6 +707,95 @@ fn handle_file_change(agent: &str, input: &HookInput) {
     };
 
     staging::upsert_receipt_in(&receipt, &ctx.cwd);
+}
+
+/// Handle PostToolUse for AskUserQuestion — captures questions and options in real-time.
+/// The user's answer will be enriched later at Stop time from the transcript.
+fn handle_ask_user_question(input: &HookInput) {
+    let cwd = input.cwd.clone().unwrap_or_else(|| ".".to_string());
+    let session_id = match input.session_id.as_ref() {
+        Some(s) => s.clone(),
+        None => return,
+    };
+    let tool_input = match input.tool_input.as_ref() {
+        Some(ti) => ti,
+        None => return,
+    };
+
+    let questions = match tool_input.get("questions").and_then(|q| q.as_array()) {
+        Some(qs) => qs,
+        None => return,
+    };
+
+    let decisions: Vec<UserDecision> = questions
+        .iter()
+        .enumerate()
+        .filter_map(|(i, q)| {
+            let question = q.get("question").and_then(|v| v.as_str())?.to_string();
+            let header = q.get("header").and_then(|v| v.as_str()).map(String::from);
+            let multi_select = q
+                .get("multiSelect")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let options: Vec<DecisionOption> = q
+                .get("options")
+                .and_then(|o| o.as_array())
+                .map(|opts| {
+                    opts.iter()
+                        .filter_map(|opt| {
+                            Some(DecisionOption {
+                                label: opt.get("label").and_then(|v| v.as_str())?.to_string(),
+                                selected: false,
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            // Use a temporary ID; the real tool_use_id is set at Stop time
+            // by matching on question text from the transcript.
+            Some(UserDecision {
+                tool_use_id: format!("pending_{}", i),
+                question,
+                header,
+                options,
+                multi_select,
+                answer: None,
+            })
+        })
+        .collect();
+
+    if decisions.is_empty() {
+        return;
+    }
+
+    // Directly update the staging receipt for this session
+    let mut data = staging::read_staging_in(Path::new(&cwd));
+    let last_pn = data
+        .receipts
+        .iter()
+        .filter(|r| r.session_id == session_id)
+        .filter_map(|r| r.prompt_number)
+        .max();
+
+    if let Some(pn) = last_pn {
+        if let Some(receipt) = data
+            .receipts
+            .iter_mut()
+            .find(|r| r.session_id == session_id && r.prompt_number == Some(pn))
+        {
+            for decision in decisions {
+                // Skip if a decision with same question text already tracked
+                if !receipt
+                    .user_decisions
+                    .iter()
+                    .any(|d| d.question == decision.question)
+                {
+                    receipt.user_decisions.push(decision);
+                }
+            }
+            staging::write_staging_data_in(&data, &cwd);
+        }
+    }
 }
 
 /// Handle Stop event — ensure every user prompt in the session has a receipt,
@@ -515,19 +822,43 @@ fn handle_stop(agent: &str, input: &HookInput) {
 
     // Sweep for any git-modified files not yet tracked in the current prompt's receipt.
     // This catches files changed by Bash commands or other tools that bypass PostToolUse tracking.
+    //
+    // IMPORTANT: Only sweep if the target prompt actually used Bash (or similar tools that
+    // modify files without firing PostToolUse). Without this guard, prompts like "hello"
+    // would incorrectly get ALL uncommitted files attributed to them.
     let git_modified = get_all_git_modified_files(&ctx.cwd);
     if !git_modified.is_empty() {
-        // Find the last prompt in this session that already has a receipt with file changes.
-        // Missing files (e.g. from Bash) are attributed to that prompt since we can't
-        // determine which specific prompt caused a Bash-based file change.
         if let Some(last_pn) = existing_prompt_numbers.iter().flatten().copied().max() {
-            // Build FileChanges for any git-modified file not already in the receipt
-            let already_tracked: Vec<String> = existing
+            // Only sweep if the target prompt used Bash — the only tool that can modify
+            // files without firing PostToolUse. Skip for prompts with no file-modifying tools.
+            let target_tools = transcript::extract_tools_for_prompt(&ctx.parsed.transcript, last_pn);
+            let has_bash = target_tools.iter().any(|t| t == "Bash");
+
+            if has_bash {
+            // Build already_tracked from BOTH staging data AND transcript.
+            // This prevents files from earlier prompts leaking onto the current prompt
+            // even when staging.json was deleted/reset (the transcript is always available).
+            let mut already_tracked: Vec<String> = existing
                 .receipts
                 .iter()
-                .filter(|r| r.session_id == ctx.parsed.session_id && r.prompt_number == Some(last_pn))
+                .filter(|r| r.session_id == ctx.parsed.session_id)
                 .flat_map(|r| r.files_changed.iter().map(|fc| fc.path.clone()))
                 .collect();
+
+            // Also extract files from ALL other prompts' tool calls in the transcript.
+            // This is the fallback that catches files when staging was deleted.
+            for pn in 1..=total_prompts {
+                if pn == last_pn {
+                    continue; // Don't exclude the target prompt's own files
+                }
+                let pn_files = transcript::files_for_prompt(&ctx.parsed.transcript, pn);
+                for f in pn_files {
+                    let rel = util::make_relative(&f, &ctx.cwd);
+                    if !already_tracked.contains(&rel) {
+                        already_tracked.push(rel);
+                    }
+                }
+            }
 
             let missing_files: Vec<FileChange> = git_modified
                 .iter()
@@ -562,9 +893,14 @@ fn handle_stop(agent: &str, input: &HookInput) {
                     model: patch_model,
                     session_id: ctx.parsed.session_id.clone(),
                     prompt_summary: String::new(),
+                    response_summary: None,
                     prompt_hash: ctx.prompt_hash.clone(),
                     message_count: ctx.message_count,
                     cost_usd: 0.0,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_read_tokens: None,
+                    cache_creation_tokens: None,
                     timestamp: Utc::now(),
                     session_start: ctx.parsed.session_start,
                     session_end: ctx.parsed.session_end,
@@ -584,26 +920,35 @@ fn handle_stop(agent: &str, input: &HookInput) {
                     total_deletions: missing_files.iter().map(|f| f.deletions).sum(),
                     files_changed: missing_files,
                     parent_receipt_id: None,
+                    parent_session_id: None,
+                    is_continuation: None,
+                    continuation_depth: None,
                     prompt_number: Some(last_pn),
                     tools_used: vec![],
                     mcp_servers: vec![],
                     agents_spawned: vec![],
+                    subagent_activities: vec![],
+                    concurrent_tool_calls: None,
+                    user_decisions: vec![],
                     conversation: None,
                 };
                 staging::upsert_receipt_in(&patch, &ctx.cwd);
             }
+            } // if has_bash
         }
     }
-
-    let tools = extract_tools_used(&ctx.parsed.transcript);
-    let mcps = extract_mcp_servers(&ctx.parsed.transcript);
-    let agents = extract_agents_spawned(&ctx.parsed.transcript);
 
     // Stop fires after each prompt completes, so total_prompts IS the current prompt number.
     // Always finalize the current prompt's receipt — this updates any preliminary receipt
     // created by UserPromptSubmit with full conversation, tools, cost, and session timing.
     // The upsert merge logic preserves any file changes already written by PostToolUse.
     let current_pn = total_prompts;
+
+    // Extract tools/MCP/agents scoped to THIS prompt only (not the full session).
+    // Using full-session extraction would attribute every tool from every prompt to each receipt.
+    let tools = extract_tools_for_prompt(&ctx.parsed.transcript, current_pn);
+    let mcps = extract_mcps_for_prompt(&ctx.parsed.transcript, current_pn);
+    let agents = extract_agents_for_prompt(&ctx.parsed.transcript, current_pn);
 
     // Use the model from the assistant messages that actually responded to this prompt.
     // This correctly handles model switches mid-session (e.g. sonnet → opus).
@@ -621,7 +966,10 @@ fn handle_stop(agent: &str, input: &HookInput) {
     let prompt_duration_secs = prompt_submitted_at
         .map(|start| (Utc::now() - start).num_seconds().max(0) as u64);
 
-    let current_summary = transcript::last_user_prompt(&ctx.parsed.transcript)
+    // Use nth_user_prompt (not last_user_prompt) to get the EXACT prompt for this receipt.
+    // last_user_prompt is wrong here because by the time Stop fires, the transcript JSONL
+    // may already contain a newer prompt, causing the summary to bleed into the wrong receipt.
+    let current_summary = transcript::nth_user_prompt(&ctx.parsed.transcript, current_pn)
         .map(|p| {
             let truncated: String = p.chars().take(ctx.cfg.capture.max_prompt_length).collect();
             redact::redact_secrets_with_config(&truncated, &ctx.cfg)
@@ -641,16 +989,40 @@ fn handle_stop(agent: &str, input: &HookInput) {
         }
     }
 
+    // Capture the AI's response summary from the Stop hook's last_assistant_message.
+    // Truncate to a reasonable length for storage.
+    let response_summary = input
+        .last_assistant_message
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let truncated: String = s.chars().take(ctx.cfg.capture.max_prompt_length).collect();
+            redact::redact_secrets_with_config(&truncated, &ctx.cfg)
+        });
+
+    // Per-prompt cost/tokens — avoids the cumulative full-session totals that inflate costs.
+    let (prompt_cost, prompt_tokens) = prompt_cost_and_tokens(&ctx, current_pn);
+
+    // Use the actual prompt timestamp from the JSONL instead of Utc::now().
+    // This ensures the receipt shows when the prompt was submitted, not when Stop fired.
+    let prompt_ts = transcript::timestamp_for_prompt(&ctx.parsed, current_pn)
+        .unwrap_or_else(Utc::now);
+
     let current_receipt = Receipt {
         id: Receipt::new_id(),
         provider: agent.to_string(),
         model: current_model.clone(),
         session_id: ctx.parsed.session_id.clone(),
         prompt_summary: current_summary,
+        response_summary,
         prompt_hash: ctx.prompt_hash.clone(),
         message_count: ctx.message_count,
-        cost_usd: ctx.cost,
-        timestamp: Utc::now(),
+        cost_usd: prompt_cost,
+        input_tokens: prompt_tokens.as_ref().map(|u| u.input_tokens),
+        output_tokens: prompt_tokens.as_ref().map(|u| u.output_tokens),
+        cache_read_tokens: prompt_tokens.as_ref().map(|u| u.cache_read_tokens),
+        cache_creation_tokens: prompt_tokens.as_ref().map(|u| u.cache_creation_tokens),
+        timestamp: prompt_ts,
         session_start: ctx.parsed.session_start,
         session_end: ctx.parsed.session_end,
         session_duration_secs: ctx.parsed.session_duration_secs,
@@ -664,12 +1036,21 @@ fn handle_stop(agent: &str, input: &HookInput) {
         line_range: (0, 0),
         files_changed: vec![], // files_changed is merged by upsert; don't overwrite
         parent_receipt_id: None,
+        parent_session_id: None,
+        is_continuation: None,
+        continuation_depth: None,
         prompt_number: Some(current_pn),
         total_additions: 0,
         total_deletions: 0,
         tools_used: tools.clone(),
         mcp_servers: mcps.clone(),
         agents_spawned: agents.clone(),
+        subagent_activities: vec![],
+        concurrent_tool_calls: {
+            let c = count_concurrent_tools(&ctx.parsed.transcript);
+            if c > 1 { Some(c) } else { None }
+        },
+        user_decisions: transcript::extract_user_decisions(&ctx.parsed.transcript),
         conversation: if current_turns.is_empty() {
             None
         } else {
@@ -710,16 +1091,28 @@ fn handle_stop(agent: &str, input: &HookInput) {
             }
         }
 
+        // Per-prompt cost/tokens for retrospective receipts too
+        let (pn_cost, pn_tokens) = prompt_cost_and_tokens(&ctx, pn);
+
+        // Use the actual prompt timestamp from the JSONL for backfilled receipts.
+        let pn_ts = transcript::timestamp_for_prompt(&ctx.parsed, pn)
+            .unwrap_or_else(Utc::now);
+
         let receipt = Receipt {
             id: Receipt::new_id(),
             provider: agent.to_string(),
             model: pn_model,
             session_id: ctx.parsed.session_id.clone(),
             prompt_summary,
+            response_summary: None, // Not available for retrospective receipts
             prompt_hash: ctx.prompt_hash.clone(),
             message_count: ctx.message_count,
-            cost_usd: ctx.cost,
-            timestamp: Utc::now(),
+            cost_usd: pn_cost,
+            input_tokens: pn_tokens.as_ref().map(|u| u.input_tokens),
+            output_tokens: pn_tokens.as_ref().map(|u| u.output_tokens),
+            cache_read_tokens: pn_tokens.as_ref().map(|u| u.cache_read_tokens),
+            cache_creation_tokens: pn_tokens.as_ref().map(|u| u.cache_creation_tokens),
+            timestamp: pn_ts,
             session_start: ctx.parsed.session_start,
             session_end: ctx.parsed.session_end,
             session_duration_secs: ctx.parsed.session_duration_secs,
@@ -733,12 +1126,18 @@ fn handle_stop(agent: &str, input: &HookInput) {
             line_range: (0, 0),
             files_changed: vec![],
             parent_receipt_id: None,
+            parent_session_id: None,
+            is_continuation: None,
+            continuation_depth: None,
             prompt_number: Some(pn),
             total_additions: 0,
             total_deletions: 0,
-            tools_used: tools.clone(),
-            mcp_servers: mcps.clone(),
-            agents_spawned: agents.clone(),
+            tools_used: extract_tools_for_prompt(&ctx.parsed.transcript, pn),
+            mcp_servers: extract_mcps_for_prompt(&ctx.parsed.transcript, pn),
+            agents_spawned: extract_agents_for_prompt(&ctx.parsed.transcript, pn),
+            subagent_activities: vec![],
+            concurrent_tool_calls: None,
+            user_decisions: vec![],
             conversation: if pn_turns.is_empty() {
                 None
             } else {
@@ -747,6 +1146,96 @@ fn handle_stop(agent: &str, input: &HookInput) {
         };
 
         staging::upsert_receipt_in(&receipt, &ctx.cwd);
+    }
+}
+
+/// Handle SubagentStart — a Task tool subagent has been spawned.
+/// Creates a SubagentActivity entry on the current prompt's receipt.
+fn handle_subagent_start(input: &HookInput) {
+    let cwd = input.cwd.clone().unwrap_or_else(|| ".".to_string());
+    let session_id = match input.session_id.as_ref() {
+        Some(s) => s.clone(),
+        None => return,
+    };
+
+    let existing = staging::read_staging_in(Path::new(&cwd));
+    // Find the most recent receipt for this session
+    let last_pn = existing
+        .receipts
+        .iter()
+        .filter(|r| r.session_id == session_id)
+        .filter_map(|r| r.prompt_number)
+        .max();
+
+    let pn = match last_pn {
+        Some(pn) => pn,
+        None => return, // No receipt for this session yet
+    };
+
+    let activity = SubagentActivity {
+        agent_id: input.agent_id.clone(),
+        agent_type: input.agent_type.clone(),
+        description: None, // Not provided in SubagentStart payload
+        status: "started".to_string(),
+        started_at: Some(Utc::now()),
+        completed_at: None,
+        tools_used: vec![],
+    };
+
+    // Read current receipt and add the activity
+    let mut data = staging::read_staging_in(Path::new(&cwd));
+    if let Some(receipt) = data
+        .receipts
+        .iter_mut()
+        .find(|r| r.session_id == session_id && r.prompt_number == Some(pn))
+    {
+        // Don't add duplicate entries for the same agent_id
+        if let Some(ref aid) = activity.agent_id {
+            if receipt.subagent_activities.iter().any(|a| a.agent_id.as_deref() == Some(aid)) {
+                return;
+            }
+        }
+        receipt.subagent_activities.push(activity);
+        staging::write_staging_data_in(&data, &cwd);
+    }
+}
+
+/// Handle SubagentStop — a Task tool subagent has completed.
+/// Updates the matching SubagentActivity to "completed" and extracts tools used.
+fn handle_subagent_stop(input: &HookInput) {
+    let cwd = input.cwd.clone().unwrap_or_else(|| ".".to_string());
+    let session_id = match input.session_id.as_ref() {
+        Some(s) => s.clone(),
+        None => return,
+    };
+
+    // Parse the subagent's transcript if available to extract tools used
+    let subagent_tools: Vec<String> = input
+        .agent_transcript_path
+        .as_ref()
+        .and_then(|path| transcript::parse_claude_jsonl(path).ok())
+        .map(|parsed| transcript::extract_tools_used(&parsed.transcript))
+        .unwrap_or_default();
+
+    let mut data = staging::read_staging_in(Path::new(&cwd));
+    // Find the receipt for this session and update the matching activity
+    for receipt in data.receipts.iter_mut().filter(|r| r.session_id == session_id) {
+        let found = if let Some(ref aid) = input.agent_id {
+            receipt.subagent_activities.iter_mut().find(|a| a.agent_id.as_deref() == Some(aid))
+        } else {
+            // No agent_id — update the last "started" activity
+            receipt.subagent_activities.iter_mut().rev().find(|a| a.status == "started")
+        };
+
+        if let Some(activity) = found {
+            activity.status = "completed".to_string();
+            activity.completed_at = Some(Utc::now());
+            if !subagent_tools.is_empty() {
+                activity.tools_used = subagent_tools;
+            }
+            staging::write_staging_data_in(&data, &cwd);
+            return;
+        }
     }
 }
 
@@ -789,6 +1278,63 @@ mod tests {
         assert!(input.transcript_path.is_none());
         assert!(input.file_paths.is_empty());
         assert!(input.prompt.is_none());
+        assert!(input.last_assistant_message.is_none());
+        assert!(input.session_id.is_none());
+    }
+
+    #[test]
+    fn test_continuation_marker_detection() {
+        let prompt = "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion.";
+        assert!(prompt.starts_with(CONTINUATION_MARKER));
+    }
+
+    #[test]
+    fn test_normal_prompt_not_continuation() {
+        let prompt = "Fix the failing tests in checkpoint.rs";
+        assert!(!prompt.starts_with(CONTINUATION_MARKER));
+    }
+
+    #[test]
+    fn test_parse_hook_input_subagent_start() {
+        let json = r#"{"session_id":"abc-123","hook_event_name":"SubagentStart","cwd":"/proj","agent_id":"agent-1","agent_type":"Explore"}"#;
+        let input = parse_hook_input(json);
+        assert_eq!(input.hook_event_name.as_deref(), Some("SubagentStart"));
+        assert_eq!(input.agent_id.as_deref(), Some("agent-1"));
+        assert_eq!(input.agent_type.as_deref(), Some("Explore"));
+    }
+
+    #[test]
+    fn test_parse_hook_input_parent_session_id() {
+        let json = r#"{"session_id":"new-session","parent_session_id":"old-session","hook_event_name":"UserPromptSubmit","prompt":"continue..."}"#;
+        let input = parse_hook_input(json);
+        assert_eq!(input.parent_session_id.as_deref(), Some("old-session"));
+    }
+
+    #[test]
+    fn test_parse_hook_input_ask_user_question() {
+        let json = r#"{"session_id":"s1","hook_event_name":"PostToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which approach?","header":"Approach","options":[{"label":"CSS variables"},{"label":"Theme context"}],"multiSelect":false}]}}"#;
+        let input = parse_hook_input(json);
+        assert_eq!(input.tool_name.as_deref(), Some("AskUserQuestion"));
+        assert!(input.tool_input.is_some());
+        let ti = input.tool_input.unwrap();
+        let qs = ti.get("questions").unwrap().as_array().unwrap();
+        assert_eq!(qs.len(), 1);
+        assert_eq!(
+            qs[0].get("question").unwrap().as_str().unwrap(),
+            "Which approach?"
+        );
+    }
+
+    #[test]
+    fn test_parse_hook_input_stop_event() {
+        let json = r#"{"session_id":"abc-123","hook_event_name":"Stop","transcript_path":"/tmp/t.jsonl","cwd":"/proj","last_assistant_message":"I fixed the bug by updating the parser to handle edge cases."}"#;
+        let input = parse_hook_input(json);
+        assert_eq!(input.hook_event_name.as_deref(), Some("Stop"));
+        assert_eq!(input.session_id.as_deref(), Some("abc-123"));
+        assert_eq!(
+            input.last_assistant_message.as_deref(),
+            Some("I fixed the bug by updating the parser to handle edge cases.")
+        );
     }
 
 }

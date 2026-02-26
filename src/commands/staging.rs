@@ -116,6 +116,17 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
         } else {
             receipt.cost_usd
         };
+        // Preserve response_summary: set once at Stop, keep if already present.
+        let keep_response_summary = if receipt.response_summary.is_some() {
+            receipt.response_summary.clone()
+        } else {
+            existing.response_summary.clone()
+        };
+        // Preserve token usage: use incoming if present, otherwise keep existing.
+        let keep_input_tokens = receipt.input_tokens.or(existing.input_tokens);
+        let keep_output_tokens = receipt.output_tokens.or(existing.output_tokens);
+        let keep_cache_read = receipt.cache_read_tokens.or(existing.cache_read_tokens);
+        let keep_cache_creation = receipt.cache_creation_tokens.or(existing.cache_creation_tokens);
         let keep_session_end = receipt.session_end.or(existing.session_end);
         // Preserve prompt_submitted_at: set once at UserPromptSubmit, never overwritten.
         let keep_prompt_submitted_at = existing
@@ -138,6 +149,56 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
         // Preserve accepted/overridden lines (computed at attach time; never overwrite once set).
         let keep_accepted_lines = existing.accepted_lines.or(receipt.accepted_lines);
         let keep_overridden_lines = existing.overridden_lines.or(receipt.overridden_lines);
+        // Preserve continuation chain fields: set once at UserPromptSubmit, never overwritten.
+        let keep_parent_session_id = existing
+            .parent_session_id
+            .clone()
+            .or(receipt.parent_session_id.clone());
+        let keep_is_continuation = existing.is_continuation.or(receipt.is_continuation);
+        let keep_continuation_depth = existing.continuation_depth.or(receipt.continuation_depth);
+        // Preserve subagent activities: smart-merge by agent_id.
+        let keep_subagent_activities = if receipt.subagent_activities.is_empty() {
+            existing.subagent_activities.clone()
+        } else {
+            let mut merged = existing.subagent_activities.clone();
+            for incoming in &receipt.subagent_activities {
+                if let Some(ref aid) = incoming.agent_id {
+                    if let Some(pos) = merged.iter().position(|a| a.agent_id.as_deref() == Some(aid)) {
+                        merged[pos] = incoming.clone();
+                    } else {
+                        merged.push(incoming.clone());
+                    }
+                } else {
+                    merged.push(incoming.clone());
+                }
+            }
+            merged
+        };
+        // Preserve concurrent_tool_calls: take the max.
+        let keep_concurrent_tool_calls = match (existing.concurrent_tool_calls, receipt.concurrent_tool_calls) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+        // Preserve user_decisions: smart-merge by tool_use_id (or question text for pending IDs).
+        let keep_user_decisions = if receipt.user_decisions.is_empty() {
+            existing.user_decisions.clone()
+        } else {
+            let mut merged = existing.user_decisions.clone();
+            for incoming in &receipt.user_decisions {
+                let pos = merged.iter().position(|d| {
+                    (!d.tool_use_id.starts_with("pending_")
+                        && d.tool_use_id == incoming.tool_use_id)
+                        || d.question == incoming.question
+                });
+                if let Some(pos) = pos {
+                    // Incoming has answer or real tool_use_id: update
+                    merged[pos] = incoming.clone();
+                } else {
+                    merged.push(incoming.clone());
+                }
+            }
+            merged
+        };
 
         // Update the receipt in place
         *existing = receipt.clone();
@@ -145,11 +206,16 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
         existing.parent_receipt_id = original_parent;
         existing.files_changed = merged_files;
         existing.prompt_summary = keep_summary;
+        existing.response_summary = keep_response_summary;
         existing.conversation = keep_conversation;
         existing.tools_used = keep_tools;
         existing.mcp_servers = keep_mcps;
         existing.agents_spawned = keep_agents;
         existing.cost_usd = keep_cost;
+        existing.input_tokens = keep_input_tokens;
+        existing.output_tokens = keep_output_tokens;
+        existing.cache_read_tokens = keep_cache_read;
+        existing.cache_creation_tokens = keep_cache_creation;
         existing.session_end = keep_session_end;
         existing.prompt_submitted_at = keep_prompt_submitted_at;
         existing.prompt_duration_secs = keep_prompt_duration_secs;
@@ -157,6 +223,12 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
         existing.total_deletions = keep_total_deletions;
         existing.accepted_lines = keep_accepted_lines;
         existing.overridden_lines = keep_overridden_lines;
+        existing.parent_session_id = keep_parent_session_id;
+        existing.is_continuation = keep_is_continuation;
+        existing.continuation_depth = keep_continuation_depth;
+        existing.subagent_activities = keep_subagent_activities;
+        existing.concurrent_tool_calls = keep_concurrent_tool_calls;
+        existing.user_decisions = keep_user_decisions;
 
         // Keep legacy fields pointing at first file
         if let Some(first) = existing.files_changed.first() {
@@ -195,6 +267,15 @@ fn write_staging_data(data: &StagingData, path: &Path, tmp_path: &Path) {
     }
 }
 
+/// Write staging data to a specific base directory.
+pub fn write_staging_data_in(data: &StagingData, base_dir: &str) {
+    let base = Path::new(base_dir);
+    ensure_staging_dir_in(base);
+    let path = staging_path_in(base);
+    let tmp_path = staging_dir_in(base).join("staging.json.tmp");
+    write_staging_data(data, &path, &tmp_path);
+}
+
 pub fn read_staging_in(base: &Path) -> StagingData {
     let path = staging_path_in(base);
     match std::fs::read_to_string(&path) {
@@ -230,9 +311,14 @@ mod tests {
             model: "test".to_string(),
             session_id: session_id.to_string(),
             prompt_summary: "original".to_string(),
+            response_summary: None,
             prompt_hash: "h".to_string(),
             message_count: 1,
             cost_usd: 0.0,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
             timestamp: Utc::now(),
             session_start: None,
             session_end: None,
@@ -243,12 +329,18 @@ mod tests {
             line_range: (0, 0),
             files_changed: vec![],
             parent_receipt_id: None,
+            parent_session_id: None,
+            is_continuation: None,
+            continuation_depth: None,
             prompt_number: Some(pn),
             total_additions: 0,
             total_deletions: 0,
             tools_used: vec![],
             mcp_servers: vec![],
             agents_spawned: vec![],
+            subagent_activities: vec![],
+            concurrent_tool_calls: None,
+            user_decisions: vec![],
             conversation: None,
             prompt_submitted_at: None,
             prompt_duration_secs: None,
@@ -329,5 +421,145 @@ mod tests {
         assert!((receipt.cost_usd - 0.05).abs() < 0.001);
         // total_additions should be preserved
         assert_eq!(receipt.total_additions, 10);
+    }
+
+    #[test]
+    fn test_upsert_preserves_continuation_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_str().unwrap();
+
+        // UserPromptSubmit creates receipt with continuation info
+        let mut r = make_receipt("s2", 1);
+        r.parent_session_id = Some("s1".to_string());
+        r.is_continuation = Some(true);
+        r.continuation_depth = Some(1);
+        upsert_receipt_in(&r, dir);
+
+        // Stop finalizes — incoming has None for continuation fields
+        let mut stop = make_receipt("s2", 1);
+        stop.parent_session_id = None;
+        stop.is_continuation = None;
+        stop.continuation_depth = None;
+        stop.cost_usd = 0.10;
+        upsert_receipt_in(&stop, dir);
+
+        let data = read_staging_in(tmp.path());
+        let receipt = &data.receipts[0];
+        assert_eq!(receipt.parent_session_id, Some("s1".to_string()));
+        assert_eq!(receipt.is_continuation, Some(true));
+        assert_eq!(receipt.continuation_depth, Some(1));
+        assert!((receipt.cost_usd - 0.10).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_upsert_merges_subagent_activities() {
+        use crate::core::receipt::SubagentActivity;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_str().unwrap();
+
+        // First upsert: receipt with one subagent
+        let mut r = make_receipt("s1", 1);
+        r.subagent_activities = vec![SubagentActivity {
+            agent_id: Some("a1".to_string()),
+            agent_type: Some("Explore".to_string()),
+            description: None,
+            status: "started".to_string(),
+            started_at: None,
+            completed_at: None,
+            tools_used: vec![],
+        }];
+        upsert_receipt_in(&r, dir);
+
+        // Second upsert: update same agent to completed + add new agent
+        let mut patch = make_receipt("s1", 1);
+        patch.subagent_activities = vec![
+            SubagentActivity {
+                agent_id: Some("a1".to_string()),
+                agent_type: Some("Explore".to_string()),
+                description: None,
+                status: "completed".to_string(),
+                started_at: None,
+                completed_at: None,
+                tools_used: vec!["Glob".to_string(), "Read".to_string()],
+            },
+            SubagentActivity {
+                agent_id: Some("a2".to_string()),
+                agent_type: Some("Plan".to_string()),
+                description: None,
+                status: "started".to_string(),
+                started_at: None,
+                completed_at: None,
+                tools_used: vec![],
+            },
+        ];
+        upsert_receipt_in(&patch, dir);
+
+        let data = read_staging_in(tmp.path());
+        let receipt = &data.receipts[0];
+        assert_eq!(receipt.subagent_activities.len(), 2);
+        assert_eq!(receipt.subagent_activities[0].status, "completed");
+        assert_eq!(receipt.subagent_activities[0].tools_used, vec!["Glob", "Read"]);
+        assert_eq!(receipt.subagent_activities[1].agent_id, Some("a2".to_string()));
+    }
+
+    #[test]
+    fn test_upsert_merges_user_decisions() {
+        use crate::core::receipt::{DecisionOption, UserDecision};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_str().unwrap();
+
+        // First upsert: receipt with a pending decision (from PostToolUse)
+        let mut r = make_receipt("s1", 1);
+        r.user_decisions = vec![UserDecision {
+            tool_use_id: "pending_0".to_string(),
+            question: "Which approach?".to_string(),
+            header: Some("Approach".to_string()),
+            options: vec![
+                DecisionOption {
+                    label: "CSS variables".to_string(),
+                    selected: false,
+                },
+                DecisionOption {
+                    label: "Theme context".to_string(),
+                    selected: false,
+                },
+            ],
+            multi_select: false,
+            answer: None,
+        }];
+        upsert_receipt_in(&r, dir);
+
+        // Second upsert: Stop time enrichment with real tool_use_id and answer
+        let mut patch = make_receipt("s1", 1);
+        patch.user_decisions = vec![UserDecision {
+            tool_use_id: "toolu_001".to_string(),
+            question: "Which approach?".to_string(),
+            header: Some("Approach".to_string()),
+            options: vec![
+                DecisionOption {
+                    label: "CSS variables".to_string(),
+                    selected: true,
+                },
+                DecisionOption {
+                    label: "Theme context".to_string(),
+                    selected: false,
+                },
+            ],
+            multi_select: false,
+            answer: Some("CSS variables".to_string()),
+        }];
+        upsert_receipt_in(&patch, dir);
+
+        let data = read_staging_in(tmp.path());
+        let receipt = &data.receipts[0];
+        assert_eq!(receipt.user_decisions.len(), 1);
+        assert_eq!(receipt.user_decisions[0].tool_use_id, "toolu_001");
+        assert_eq!(
+            receipt.user_decisions[0].answer,
+            Some("CSS variables".to_string())
+        );
+        assert!(receipt.user_decisions[0].options[0].selected);
     }
 }

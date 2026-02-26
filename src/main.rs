@@ -166,6 +166,34 @@ enum Commands {
         workspace: Option<String>,
     },
 
+    /// Import recent AI chat sessions from GitHub Copilot (VS Code)
+    RecordCopilot {
+        /// Path to a specific VS Code workspace storage directory or state.vscdb
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+
+    /// Import OpenAI Codex CLI session transcripts
+    RecordCodex {
+        /// Path to a specific session file or directory
+        #[arg(long)]
+        session: Option<String>,
+    },
+
+    /// Import Google Gemini CLI session transcripts
+    RecordGemini {
+        /// Path to a specific session file or directory
+        #[arg(long)]
+        session: Option<String>,
+    },
+
+    /// Import recent AI chat sessions from Windsurf (Codeium)
+    RecordWindsurf {
+        /// Path to a specific Windsurf workspace storage directory or state.vscdb
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+
     /// Manage the local SQLite cache
     Cache {
         #[command(subcommand)]
@@ -233,6 +261,25 @@ enum Commands {
         /// Repository slug (owner/repo, auto-detected from remote if omitted)
         #[arg(long)]
         repo: Option<String>,
+    },
+
+    /// Generate a hackathon fairness verification report
+    HackathonReport {
+        /// Hackathon start time (ISO 8601, e.g. "2026-02-26T09:00:00Z" or "2026-02-26"). Defaults to 24h ago.
+        #[arg(long)]
+        start: Option<String>,
+        /// Hackathon end time (ISO 8601, e.g. "2026-02-26T21:00:00Z" or "2026-02-27"). Defaults to now.
+        #[arg(long)]
+        end: Option<String>,
+        /// Output file path
+        #[arg(long, default_value = "./hackathon-report.md")]
+        output: String,
+        /// Filter to a specific participant (git user name or email)
+        #[arg(long)]
+        author: Option<String>,
+        /// Include uncommitted/staged receipts
+        #[arg(long)]
+        include_uncommitted: bool,
     },
 
     /// Show line-by-line AI provenance for a file
@@ -498,6 +545,22 @@ fn main() {
             integrations::cursor::run_record_cursor(workspace.as_deref());
         }
 
+        Commands::RecordCopilot { workspace } => {
+            integrations::copilot::run_record_copilot(workspace.as_deref());
+        }
+
+        Commands::RecordCodex { session } => {
+            integrations::codex::run_record_codex(session.as_deref());
+        }
+
+        Commands::RecordGemini { session } => {
+            integrations::gemini::run_record_gemini(session.as_deref());
+        }
+
+        Commands::RecordWindsurf { workspace } => {
+            integrations::windsurf::run_record_windsurf(workspace.as_deref());
+        }
+
         Commands::Cache { action } => match action {
             CacheAction::Sync => {
                 if let Err(e) = core::db::sync_from_notes() {
@@ -542,6 +605,32 @@ fn main() {
 
         Commands::GithubComment { pr, repo } => {
             commands::github::run(pr, repo.as_deref());
+        }
+
+        Commands::HackathonReport {
+            start,
+            end,
+            output,
+            author,
+            include_uncommitted,
+        } => {
+            // Default: 24h window ending now
+            let default_end = chrono::Utc::now().to_rfc3339();
+            let default_start =
+                (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+            let start_str = start.as_deref().unwrap_or(&default_start);
+            let end_str = end.as_deref().unwrap_or(&default_end);
+
+            if let Err(e) = commands::hackathon::generate_hackathon_report(
+                start_str,
+                end_str,
+                &output,
+                author.as_deref(),
+                include_uncommitted,
+            ) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
 
         Commands::CheckProvenance { file, line } => {

@@ -13,6 +13,60 @@ pub struct ConversationTurn {
     pub files_touched: Option<Vec<String>>,
 }
 
+/// Detailed tracking of a subagent (Task tool) spawned during a prompt.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SubagentActivity {
+    /// Unique agent ID from SubagentStart/Stop hook payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    /// Agent type: "Explore", "Plan", "general-purpose", etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+    /// Task description provided when spawning the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Lifecycle status: "started", "completed", "active".
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
+    /// Tools used by this subagent (e.g., "Glob", "Grep", "Read").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools_used: Vec<String>,
+}
+
+/// A single option presented in an AskUserQuestion prompt.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DecisionOption {
+    /// The option text shown to the user.
+    pub label: String,
+    /// Whether this option was selected by the user.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub selected: bool,
+}
+
+/// A structured decision point where the AI asked the user a question
+/// and the user selected from presented options (via AskUserQuestion tool).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UserDecision {
+    /// Unique tool_use ID from Claude Code (e.g., "toolu_001").
+    pub tool_use_id: String,
+    /// The question text shown to the user.
+    pub question: String,
+    /// Optional header/category label (e.g., "Approach", "Library").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// All options that were presented to the user.
+    pub options: Vec<DecisionOption>,
+    /// Whether the user could select multiple options.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub multi_select: bool,
+    /// The user's selected answer text. None at PostToolUse time; filled at Stop time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+}
+
 /// A single file change within a prompt-centric receipt.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileChange {
@@ -36,9 +90,21 @@ pub struct Receipt {
     pub model: String,
     pub session_id: String,
     pub prompt_summary: String,
+    /// Summary of the AI's response — what it actually did (from Stop hook's last_assistant_message).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_summary: Option<String>,
     pub prompt_hash: String,
     pub message_count: u32,
     pub cost_usd: f64,
+    /// Actual token usage from the API (parsed from JSONL transcript).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_tokens: Option<u64>,
     pub timestamp: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_start: Option<DateTime<Utc>>,
@@ -73,6 +139,15 @@ pub struct Receipt {
     pub files_changed: Vec<FileChange>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_receipt_id: Option<String>,
+    /// Session ID of the parent session this continues from (context exhaustion → new session).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    /// Whether this receipt is the first prompt in a continuation session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_continuation: Option<bool>,
+    /// Number of continuation hops in the session chain (0 = original, 1 = first continuation).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation_depth: Option<u32>,
     /// Which user prompt (1-based) in the session this receipt corresponds to.
     /// Used to create separate receipts per prompt within the same session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -92,6 +167,15 @@ pub struct Receipt {
     /// Sub-agents spawned via the Task tool during this session.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agents_spawned: Vec<String>,
+    /// Detailed subagent activity tracking (lifecycle, tools used per agent).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagent_activities: Vec<SubagentActivity>,
+    /// Maximum number of parallel tool calls observed during this prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrent_tool_calls: Option<u32>,
+    /// Structured user decisions from AskUserQuestion tool interactions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_decisions: Vec<UserDecision>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation: Option<Vec<ConversationTurn>>,
 }
@@ -102,6 +186,10 @@ fn default_line_range() -> (u32, u32) {
 
 fn is_zero_u32(v: &u32) -> bool {
     *v == 0
+}
+
+fn is_false(v: &bool) -> bool {
+    !v
 }
 
 impl Receipt {
@@ -250,9 +338,14 @@ mod tests {
             model: "claude-sonnet-4-5-20250929".to_string(),
             session_id: "test-session".to_string(),
             prompt_summary: "test prompt".to_string(),
+            response_summary: Some("I fixed the bug".to_string()),
             prompt_hash: "sha256:abc123".to_string(),
             message_count: 5,
             cost_usd: 0.05,
+            input_tokens: Some(1000),
+            output_tokens: Some(500),
+            cache_read_tokens: Some(200),
+            cache_creation_tokens: Some(100),
             timestamp: Utc::now(),
             session_start: Some(Utc::now()),
             session_end: Some(Utc::now()),
@@ -278,12 +371,18 @@ mod tests {
                 },
             ],
             parent_receipt_id: None,
+            parent_session_id: None,
+            is_continuation: None,
+            continuation_depth: None,
             prompt_number: Some(1),
             total_additions: 26,
             total_deletions: 2,
             tools_used: vec!["Write".to_string(), "Bash".to_string()],
             mcp_servers: vec![],
             agents_spawned: vec![],
+            subagent_activities: vec![],
+            concurrent_tool_calls: None,
+            user_decisions: vec![],
             conversation: None,
             prompt_submitted_at: None,
             prompt_duration_secs: None,
@@ -309,9 +408,14 @@ mod tests {
             model: "claude-sonnet-4-5-20250929".to_string(),
             session_id: "test".to_string(),
             prompt_summary: "test".to_string(),
+            response_summary: None,
             prompt_hash: "sha256:abc".to_string(),
             message_count: 1,
             cost_usd: 0.0,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
             timestamp: Utc::now(),
             session_start: None,
             session_end: None,
@@ -322,12 +426,18 @@ mod tests {
             line_range: (0, 0),
             files_changed: vec![],
             parent_receipt_id: None,
+            parent_session_id: None,
+            is_continuation: None,
+            continuation_depth: None,
             prompt_number: None,
             total_additions: 0,
             total_deletions: 0,
             tools_used: vec![],
             mcp_servers: vec![],
             agents_spawned: vec![],
+            subagent_activities: vec![],
+            concurrent_tool_calls: None,
+            user_decisions: vec![],
             conversation: None,
             prompt_submitted_at: None,
             prompt_duration_secs: None,
@@ -350,7 +460,18 @@ mod tests {
         assert!(!json.contains("prompt_submitted_at"));
         assert!(!json.contains("prompt_duration_secs"));
         assert!(!json.contains("accepted_lines"));
+        assert!(!json.contains("response_summary"));
+        assert!(!json.contains("input_tokens"));
+        assert!(!json.contains("output_tokens"));
+        assert!(!json.contains("cache_read_tokens"));
+        assert!(!json.contains("cache_creation_tokens"));
         assert!(!json.contains("overridden_lines"));
+        assert!(!json.contains("parent_session_id"));
+        assert!(!json.contains("is_continuation"));
+        assert!(!json.contains("continuation_depth"));
+        assert!(!json.contains("subagent_activities"));
+        assert!(!json.contains("concurrent_tool_calls"));
+        assert!(!json.contains("user_decisions"));
     }
 
     #[test]
@@ -361,9 +482,14 @@ mod tests {
             model: "opus".to_string(),
             session_id: "s1".to_string(),
             prompt_summary: "test".to_string(),
+            response_summary: None,
             prompt_hash: "h".to_string(),
             message_count: 1,
             cost_usd: 0.0,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
             timestamp: Utc::now(),
             session_start: None,
             session_end: None,
@@ -389,12 +515,18 @@ mod tests {
                 },
             ],
             parent_receipt_id: None,
+            parent_session_id: None,
+            is_continuation: None,
+            continuation_depth: None,
             prompt_number: None,
             total_additions: 0,
             total_deletions: 0,
             tools_used: vec![],
             mcp_servers: vec![],
             agents_spawned: vec![],
+            subagent_activities: vec![],
+            concurrent_tool_calls: None,
+            user_decisions: vec![],
             conversation: None,
             prompt_submitted_at: None,
             prompt_duration_secs: None,
@@ -414,9 +546,14 @@ mod tests {
             model: "opus".to_string(),
             session_id: "s1".to_string(),
             prompt_summary: "test".to_string(),
+            response_summary: None,
             prompt_hash: "h".to_string(),
             message_count: 1,
             cost_usd: 0.0,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
             timestamp: Utc::now(),
             session_start: None,
             session_end: None,
@@ -427,12 +564,18 @@ mod tests {
             line_range: (1, 50),
             files_changed: vec![],
             parent_receipt_id: None,
+            parent_session_id: None,
+            is_continuation: None,
+            continuation_depth: None,
             prompt_number: None,
             total_additions: 0,
             total_deletions: 0,
             tools_used: vec![],
             mcp_servers: vec![],
             agents_spawned: vec![],
+            subagent_activities: vec![],
+            concurrent_tool_calls: None,
+            user_decisions: vec![],
             conversation: None,
             prompt_submitted_at: None,
             prompt_duration_secs: None,
@@ -469,6 +612,37 @@ mod tests {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].path, "legacy.rs");
         assert_eq!(changes[0].line_range, (1, 30));
+    }
+
+    #[test]
+    fn test_user_decision_serialization() {
+        let decision = UserDecision {
+            tool_use_id: "toolu_001".to_string(),
+            question: "Which approach?".to_string(),
+            header: Some("Approach".to_string()),
+            options: vec![
+                DecisionOption {
+                    label: "CSS variables".to_string(),
+                    selected: true,
+                },
+                DecisionOption {
+                    label: "Theme context".to_string(),
+                    selected: false,
+                },
+            ],
+            multi_select: false,
+            answer: Some("CSS variables".to_string()),
+        };
+        let json = serde_json::to_string(&decision).unwrap();
+        assert!(json.contains("CSS variables"));
+        // multi_select: false should be omitted
+        assert!(!json.contains("multi_select"));
+        // selected: false should be omitted on "Theme context"
+        let deser: UserDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.tool_use_id, "toolu_001");
+        assert_eq!(deser.answer, Some("CSS variables".to_string()));
+        assert!(deser.options[0].selected);
+        assert!(!deser.options[1].selected);
     }
 
     #[test]

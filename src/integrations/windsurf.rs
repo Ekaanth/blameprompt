@@ -1,11 +1,11 @@
-/// Cursor IDE integration for blameprompt.
+/// Windsurf (Codeium) integration for blameprompt.
 ///
-/// Reads AI chat sessions from Cursor's workspace storage (SQLite) and
-/// converts them to blameprompt receipts staged for the next git commit.
+/// Reads AI chat sessions from Windsurf's workspace storage (SQLite)
+/// and converts them to blameprompt receipts staged for the next git commit.
 ///
-/// Cursor stores chat history in:
-///   macOS: ~/Library/Application Support/Cursor/User/workspaceStorage/<hash>/state.vscdb
-///   Linux: ~/.config/Cursor/User/workspaceStorage/<hash>/state.vscdb
+/// Windsurf stores chat history in:
+///   macOS: ~/Library/Application Support/Windsurf/User/workspaceStorage/<hash>/state.vscdb
+///   Linux: ~/.config/Windsurf/User/workspaceStorage/<hash>/state.vscdb
 use crate::commands::staging;
 use crate::core::{config, receipt::Receipt, util};
 use chrono::{DateTime, TimeZone, Utc};
@@ -14,48 +14,61 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// A parsed Cursor AI chat tab.
 #[derive(Debug)]
-pub struct CursorChatSession {
+pub struct WindsurfChatSession {
     pub session_id: String,
     pub title: String,
     pub model: String,
-    pub messages: Vec<CursorMessage>,
+    pub messages: Vec<WindsurfMessage>,
     pub timestamp: DateTime<Utc>,
 }
 
 #[derive(Debug)]
-pub struct CursorMessage {
-    pub role: String,  // "user" or "assistant"
+pub struct WindsurfMessage {
+    pub role: String,
     pub text: String,
     #[allow(dead_code)]
     pub timestamp: Option<DateTime<Utc>>,
 }
 
-// ── Flexible Cursor JSON deserialization ──────────────────────────────────
+// ── Flexible Windsurf JSON deserialization ────────────────────────────────
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-struct CursorChatRoot {
+struct WindsurfChatRoot {
     #[serde(default)]
-    tabs: Vec<CursorTab>,
+    tabs: Vec<WindsurfTab>,
+    // Windsurf Cascade uses "conversations"
+    #[serde(default)]
+    conversations: Vec<WindsurfConversation>,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-struct CursorTab {
+struct WindsurfTab {
     #[serde(default)]
     tab_id: String,
     #[serde(default)]
     chat_title: String,
     last_updated_at: Option<i64>,
     #[serde(default)]
-    conversation: Vec<CursorChatEntry>,
+    conversation: Vec<WindsurfEntry>,
 }
 
 #[derive(Deserialize, Debug)]
-struct CursorChatEntry {
-    // "type" can be "human" | "ai" | "user" | "assistant"
+#[serde(rename_all = "camelCase")]
+struct WindsurfConversation {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: String,
+    created_at: Option<i64>,
+    #[serde(default)]
+    messages: Vec<WindsurfEntry>,
+}
+
+#[derive(Deserialize, Debug)]
+struct WindsurfEntry {
     #[serde(rename = "type", default)]
     entry_type: String,
     #[serde(default)]
@@ -63,13 +76,15 @@ struct CursorChatEntry {
     #[serde(default)]
     text: String,
     #[serde(default)]
+    content: String,
+    #[serde(default)]
     message: String,
     timestamp: Option<i64>,
     #[serde(default)]
     model: String,
 }
 
-impl CursorChatEntry {
+impl WindsurfEntry {
     fn effective_role(&self) -> String {
         let raw = if !self.role.is_empty() {
             self.role.as_str()
@@ -78,7 +93,7 @@ impl CursorChatEntry {
         };
         match raw.to_lowercase().as_str() {
             "human" | "user" => "user".to_string(),
-            "ai" | "assistant" | "bot" => "assistant".to_string(),
+            "ai" | "assistant" | "bot" | "cascade" => "assistant".to_string(),
             other => other.to_string(),
         }
     }
@@ -86,6 +101,8 @@ impl CursorChatEntry {
     fn effective_text(&self) -> &str {
         if !self.text.is_empty() {
             &self.text
+        } else if !self.content.is_empty() {
+            &self.content
         } else {
             &self.message
         }
@@ -94,19 +111,21 @@ impl CursorChatEntry {
     fn effective_timestamp(&self) -> Option<DateTime<Utc>> {
         self.timestamp.map(|ms| {
             if ms > 1_000_000_000_000 {
-                // Milliseconds
-                Utc.timestamp_millis_opt(ms).single().unwrap_or_else(Utc::now)
+                Utc.timestamp_millis_opt(ms)
+                    .single()
+                    .unwrap_or_else(Utc::now)
             } else {
-                // Seconds
-                Utc.timestamp_opt(ms, 0).single().unwrap_or_else(Utc::now)
+                Utc.timestamp_opt(ms, 0)
+                    .single()
+                    .unwrap_or_else(Utc::now)
             }
         })
     }
 }
 
-/// Locate Cursor workspace storage directories.
+/// Locate Windsurf workspace storage directories.
 pub fn find_workspace_storage_dirs() -> Vec<PathBuf> {
-    let base = cursor_storage_base();
+    let base = windsurf_storage_base();
     match base {
         Some(b) if b.exists() => {
             let mut dirs: Vec<PathBuf> = std::fs::read_dir(&b)
@@ -116,7 +135,6 @@ pub fn find_workspace_storage_dirs() -> Vec<PathBuf> {
                 .filter_map(|e| e.ok().map(|e| e.path()))
                 .filter(|p| p.join("state.vscdb").exists())
                 .collect();
-            // Sort by most recently modified state.vscdb
             dirs.sort_by_key(|d| {
                 std::fs::metadata(d.join("state.vscdb"))
                     .and_then(|m| m.modified())
@@ -129,95 +147,51 @@ pub fn find_workspace_storage_dirs() -> Vec<PathBuf> {
     }
 }
 
-fn cursor_storage_base() -> Option<PathBuf> {
+fn windsurf_storage_base() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     // macOS
-    let macos = home.join("Library/Application Support/Cursor/User/workspaceStorage");
+    let macos = home.join("Library/Application Support/Windsurf/User/workspaceStorage");
     if macos.exists() {
         return Some(macos);
     }
+    // Also check Codeium path
+    let codeium = home.join("Library/Application Support/Codeium/User/workspaceStorage");
+    if codeium.exists() {
+        return Some(codeium);
+    }
     // Linux
-    let linux = home.join(".config/Cursor/User/workspaceStorage");
+    let linux = home.join(".config/Windsurf/User/workspaceStorage");
     if linux.exists() {
         return Some(linux);
     }
+    let linux_codeium = home.join(".config/Codeium/User/workspaceStorage");
+    if linux_codeium.exists() {
+        return Some(linux_codeium);
+    }
     // Windows
     if let Ok(appdata) = std::env::var("APPDATA") {
-        let win = PathBuf::from(appdata).join("Cursor/User/workspaceStorage");
+        let win = PathBuf::from(&appdata).join("Windsurf/User/workspaceStorage");
         if win.exists() {
             return Some(win);
+        }
+        let win_codeium = PathBuf::from(appdata).join("Codeium/User/workspaceStorage");
+        if win_codeium.exists() {
+            return Some(win_codeium);
         }
     }
     None
 }
 
-/// Read all Cursor chat sessions from a workspace state.vscdb.
-/// Tries both the `cursorDiskKV` table (newer Cursor versions with composerData keys)
-/// and the `ItemTable` (older versions with chatData keys).
-pub fn read_chat_sessions(db_path: &Path) -> Vec<CursorChatSession> {
+/// Read all Windsurf chat sessions from a workspace state.vscdb.
+pub fn read_chat_sessions(db_path: &Path) -> Vec<WindsurfChatSession> {
     let conn = match Connection::open(db_path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[cursor] Cannot open {}: {}", db_path.display(), e);
+            eprintln!("[windsurf] Cannot open {}: {}", db_path.display(), e);
             return vec![];
         }
     };
 
-    let mut sessions: Vec<CursorChatSession> = Vec::new();
-
-    // Try cursorDiskKV table first (newer Cursor versions)
-    sessions.extend(read_from_cursor_disk_kv(&conn));
-
-    // Also try ItemTable (older versions / additional data)
-    sessions.extend(read_from_item_table(&conn));
-
-    sessions
-}
-
-/// Read sessions from the cursorDiskKV table (newer Cursor versions).
-/// Keys follow the pattern `composerData:{conversation_id}`.
-fn read_from_cursor_disk_kv(conn: &Connection) -> Vec<CursorChatSession> {
-    let has_table: bool = conn
-        .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='cursorDiskKV'",
-            [],
-            |r| r.get::<_, i32>(0),
-        )
-        .unwrap_or(0)
-        > 0;
-
-    if !has_table {
-        return vec![];
-    }
-
-    let mut sessions = Vec::new();
-    let mut found_keys: Vec<String> = Vec::new();
-
-    // Query for composerData keys
-    let mut stmt = match conn.prepare(
-        "SELECT value FROM cursorDiskKV WHERE key LIKE 'composerData:%'",
-    ) {
-        Ok(s) => s,
-        Err(_) => return sessions,
-    };
-    let rows = stmt.query_map([], |r| r.get::<_, String>(0));
-    if let Ok(rows) = rows {
-        for row in rows.flatten() {
-            found_keys.push(row);
-        }
-    }
-
-    for value in found_keys {
-        if let Some(parsed) = parse_cursor_chat_json(&value) {
-            sessions.extend(parsed);
-        }
-    }
-
-    sessions
-}
-
-/// Read sessions from the ItemTable (legacy Cursor versions).
-fn read_from_item_table(conn: &Connection) -> Vec<CursorChatSession> {
     let has_table: bool = conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='ItemTable'",
@@ -232,14 +206,15 @@ fn read_from_item_table(conn: &Connection) -> Vec<CursorChatSession> {
     }
 
     let known_key_patterns = &[
+        "codeium.chatData",
+        "windsurf.chatData",
+        "cascade.chatData",
+        "codeium.cascade.chatData",
         "workbench.panel.aichat.view.aichat.chatData",
         "aichat.chatData",
-        "composerChatData",
-        "anysphere.cursorpilot/aichat/chatData",
-        "composer.chatData",
     ];
 
-    let mut sessions: Vec<CursorChatSession> = Vec::new();
+    let mut sessions: Vec<WindsurfChatSession> = Vec::new();
     let mut found_keys: Vec<String> = Vec::new();
 
     for &key in known_key_patterns {
@@ -252,10 +227,11 @@ fn read_from_item_table(conn: &Connection) -> Vec<CursorChatSession> {
         }
     }
 
+    // Fallback: scan for related keys
     if found_keys.is_empty() {
-        let mut stmt = match conn
-            .prepare("SELECT value FROM ItemTable WHERE key LIKE '%chat%' OR key LIKE '%Chat%'")
-        {
+        let mut stmt = match conn.prepare(
+            "SELECT value FROM ItemTable WHERE key LIKE '%codeium%' OR key LIKE '%windsurf%' OR key LIKE '%cascade%' OR key LIKE '%chat%'",
+        ) {
             Ok(s) => s,
             Err(_) => return sessions,
         };
@@ -268,7 +244,7 @@ fn read_from_item_table(conn: &Connection) -> Vec<CursorChatSession> {
     }
 
     for value in found_keys {
-        if let Some(parsed) = parse_cursor_chat_json(&value) {
+        if let Some(parsed) = parse_windsurf_chat_json(&value) {
             sessions.extend(parsed);
         }
     }
@@ -276,16 +252,16 @@ fn read_from_item_table(conn: &Connection) -> Vec<CursorChatSession> {
     sessions
 }
 
-fn parse_cursor_chat_json(json: &str) -> Option<Vec<CursorChatSession>> {
-    let root: CursorChatRoot = serde_json::from_str(json).ok()?;
+fn parse_windsurf_chat_json(json: &str) -> Option<Vec<WindsurfChatSession>> {
+    let root: WindsurfChatRoot = serde_json::from_str(json).ok()?;
     let mut sessions = Vec::new();
 
+    // Tabs format
     for tab in root.tabs {
         if tab.conversation.is_empty() {
             continue;
         }
 
-        // Extract model from last AI message
         let model = tab
             .conversation
             .iter()
@@ -293,7 +269,7 @@ fn parse_cursor_chat_json(json: &str) -> Option<Vec<CursorChatSession>> {
             .find(|e| e.effective_role() == "assistant")
             .map(|e| e.model.as_str())
             .filter(|m| !m.is_empty())
-            .unwrap_or("cursor")
+            .unwrap_or("windsurf")
             .to_string();
 
         let timestamp = tab
@@ -307,20 +283,67 @@ fn parse_cursor_chat_json(json: &str) -> Option<Vec<CursorChatSession>> {
             })
             .unwrap_or_else(Utc::now);
 
-        let messages: Vec<CursorMessage> = tab
+        let messages: Vec<WindsurfMessage> = tab
             .conversation
             .into_iter()
             .filter(|e| !e.effective_text().trim().is_empty())
-            .map(|e| CursorMessage {
+            .map(|e| WindsurfMessage {
                 role: e.effective_role(),
                 text: e.effective_text().to_string(),
                 timestamp: e.effective_timestamp(),
             })
             .collect();
 
-        sessions.push(CursorChatSession {
+        sessions.push(WindsurfChatSession {
             session_id: tab.tab_id,
             title: tab.chat_title,
+            model,
+            messages,
+            timestamp,
+        });
+    }
+
+    // Conversations format (Cascade)
+    for conv in root.conversations {
+        if conv.messages.is_empty() {
+            continue;
+        }
+
+        let model = conv
+            .messages
+            .iter()
+            .rev()
+            .find(|e| e.effective_role() == "assistant")
+            .map(|e| e.model.as_str())
+            .filter(|m| !m.is_empty())
+            .unwrap_or("windsurf")
+            .to_string();
+
+        let timestamp = conv
+            .created_at
+            .and_then(|ms| {
+                if ms > 1_000_000_000_000 {
+                    Utc.timestamp_millis_opt(ms).single()
+                } else {
+                    Utc.timestamp_opt(ms, 0).single()
+                }
+            })
+            .unwrap_or_else(Utc::now);
+
+        let messages: Vec<WindsurfMessage> = conv
+            .messages
+            .into_iter()
+            .filter(|e| !e.effective_text().trim().is_empty())
+            .map(|e| WindsurfMessage {
+                role: e.effective_role(),
+                text: e.effective_text().to_string(),
+                timestamp: e.effective_timestamp(),
+            })
+            .collect();
+
+        sessions.push(WindsurfChatSession {
+            session_id: conv.id,
+            title: conv.title,
             model,
             messages,
             timestamp,
@@ -334,9 +357,8 @@ fn parse_cursor_chat_json(json: &str) -> Option<Vec<CursorChatSession>> {
     }
 }
 
-/// Find the workspace storage directory for the current git repo.
+/// Find the Windsurf workspace storage directory for the current git repo.
 pub fn find_db_for_current_workspace() -> Option<PathBuf> {
-    // Get the workspace root (git root or cwd)
     let workspace_path = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .output()
@@ -350,14 +372,10 @@ pub fn find_db_for_current_workspace() -> Option<PathBuf> {
                 .unwrap_or_default()
         });
 
-    // Cursor hashes the workspace path to create the storage dir name
-    // We check all dirs and look for one containing a .vscode/state.vscdb
-    // with a reference to our workspace path, or just use the most recently modified
     let all = find_workspace_storage_dirs();
     for dir in &all {
         let db = dir.join("state.vscdb");
         if let Ok(conn) = Connection::open(&db) {
-            // Check if this workspace matches our path
             let found: bool = conn
                 .query_row(
                     "SELECT count(*) FROM ItemTable WHERE key = 'workspaceFolders' AND value LIKE ?1",
@@ -372,14 +390,12 @@ pub fn find_db_for_current_workspace() -> Option<PathBuf> {
         }
     }
 
-    // Fallback: most recently modified
     all.into_iter().next().map(|d| d.join("state.vscdb"))
 }
 
-/// Main entry point: scan Cursor workspace and create receipts.
-pub fn run_record_cursor(workspace: Option<&str>) {
+/// Main entry point: scan Windsurf workspace and create receipts.
+pub fn run_record_windsurf(workspace: Option<&str>) {
     let db_path = if let Some(w) = workspace {
-        // User specified a workspace storage dir or .vscdb path directly
         let p = PathBuf::from(w);
         if p.extension().is_some_and(|e| e == "vscdb") {
             p
@@ -390,22 +406,27 @@ pub fn run_record_cursor(workspace: Option<&str>) {
         match find_db_for_current_workspace() {
             Some(p) => p,
             None => {
-                eprintln!("[cursor] Cannot find Cursor workspace storage.");
-                eprintln!("  Pass --workspace <path/to/state.vscdb> to specify the database.");
+                eprintln!("[windsurf] Cannot find Windsurf workspace storage.");
+                eprintln!(
+                    "  Pass --workspace <path/to/state.vscdb> to specify the database."
+                );
                 std::process::exit(1);
             }
         }
     };
 
     if !db_path.exists() {
-        eprintln!("[cursor] Database not found: {}", db_path.display());
+        eprintln!("[windsurf] Database not found: {}", db_path.display());
         std::process::exit(1);
     }
 
     let sessions = read_chat_sessions(&db_path);
     if sessions.is_empty() {
-        eprintln!("[cursor] No AI chat sessions found in {}", db_path.display());
-        eprintln!("  Make sure you have used Cursor's AI features in this workspace.");
+        eprintln!(
+            "[windsurf] No AI chat sessions found in {}",
+            db_path.display()
+        );
+        eprintln!("  Make sure you have used Windsurf's AI features in this workspace.");
         return;
     }
 
@@ -413,11 +434,9 @@ pub fn run_record_cursor(workspace: Option<&str>) {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
-
     let user = util::git_user();
     let mut count = 0usize;
 
-    // Find files that have been recently modified in git (possible AI-changed files)
     let changed_files = get_recent_changed_files();
 
     for session in &sessions {
@@ -454,14 +473,19 @@ pub fn run_record_cursor(workspace: Option<&str>) {
 
         let receipt = Receipt {
             id: Receipt::new_id(),
-            provider: "cursor".to_string(),
+            provider: "windsurf".to_string(),
             model: session.model.clone(),
             session_id: session.session_id.clone(),
             prompt_summary,
-            response_summary: None,
+            response_summary: session
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "assistant")
+                .map(|m| m.text.chars().take(500).collect()),
             prompt_hash,
             message_count: session.messages.len() as u32,
-            cost_usd: 0.0, // Cursor doesn't expose cost
+            cost_usd: 0.0,
             input_tokens: None,
             output_tokens: None,
             cache_read_tokens: None,
@@ -503,16 +527,15 @@ pub fn run_record_cursor(workspace: Option<&str>) {
     }
 
     println!(
-        "[cursor] Recorded {} Cursor AI session(s) from {}",
+        "[windsurf] Recorded {} Windsurf AI session(s) from {}",
         count,
         db_path.display()
     );
     println!("  Receipts staged. They will be attached on next git commit.");
 }
 
-/// Get files modified in the working tree or staged.
 fn get_recent_changed_files() -> Vec<String> {
-    let output = Command::new("git")
+    let output = std::process::Command::new("git")
         .args(["diff", "--name-only", "HEAD"])
         .output()
         .ok();
@@ -529,8 +552,7 @@ fn get_recent_changed_files() -> Vec<String> {
         }
     }
 
-    // Also check staged files
-    let staged = Command::new("git")
+    let staged = std::process::Command::new("git")
         .args(["diff", "--cached", "--name-only"])
         .output()
         .ok();
@@ -548,17 +570,21 @@ fn get_recent_changed_files() -> Vec<String> {
     files
 }
 
-/// Install BlamePrompt hooks for Cursor IDE.
-/// Writes to ~/.cursor/hooks.json with event handlers for file edits.
+/// Install BlamePrompt hooks for Windsurf (Codeium).
+/// Writes to ~/.windsurf/hooks.json or ~/.codeium/hooks.json.
 pub fn install_hooks() -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    let cursor_dir = home.join(".cursor");
 
-    if !cursor_dir.exists() {
-        return Err("Cursor IDE not found (~/.cursor/ does not exist)".to_string());
-    }
+    // Try Windsurf first, then Codeium
+    let target_dir = if home.join(".windsurf").exists() {
+        home.join(".windsurf")
+    } else if home.join(".codeium").exists() {
+        home.join(".codeium")
+    } else {
+        return Err("Windsurf/Codeium not found (~/.windsurf/ or ~/.codeium/ does not exist)".to_string());
+    };
 
-    let hook_path = cursor_dir.join("hooks.json");
+    let hook_path = target_dir.join("hooks.json");
 
     // Check if already installed
     if hook_path.exists() {
@@ -576,7 +602,7 @@ pub fn install_hooks() -> Result<(), String> {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "blameprompt".to_string());
 
-    let command = format!("{} checkpoint cursor --hook-input stdin", binary);
+    let command = format!("{} checkpoint windsurf --hook-input stdin", binary);
 
     let hook_config = serde_json::json!({
         "hooks": {
@@ -584,9 +610,9 @@ pub fn install_hooks() -> Result<(), String> {
                 "command": command,
                 "description": "BlamePrompt: record AI file edits"
             }],
-            "beforeSubmitPrompt": [{
-                "command": format!("{} checkpoint cursor --hook-input stdin", binary),
-                "description": "BlamePrompt: capture prompt submission"
+            "afterCascadeResponse": [{
+                "command": format!("{} checkpoint windsurf --hook-input stdin", binary),
+                "description": "BlamePrompt: capture Cascade responses"
             }]
         }
     });
@@ -608,14 +634,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_cursor_chat_json_empty_tabs() {
-        let json = r#"{"tabs":[]}"#;
-        let result = parse_cursor_chat_json(json);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_parse_cursor_chat_json_with_session() {
+    fn test_parse_windsurf_tabs_format() {
         let json = r#"{
             "tabs": [{
                 "tabId": "tab1",
@@ -623,41 +642,37 @@ mod tests {
                 "lastUpdatedAt": 1700000000000,
                 "conversation": [
                     {"type": "human", "text": "Fix the login bug", "timestamp": 1700000000000},
-                    {"type": "ai", "text": "I'll fix it", "timestamp": 1700000001000, "model": "claude-3-5-sonnet-20241022"}
+                    {"type": "cascade", "text": "I'll fix it", "timestamp": 1700000001000, "model": "claude-3-5-sonnet"}
                 ]
-            }]
+            }],
+            "conversations": []
         }"#;
-        let result = parse_cursor_chat_json(json);
+        let result = parse_windsurf_chat_json(json);
         assert!(result.is_some());
         let sessions = result.unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].title, "Fix bug");
-        assert_eq!(sessions[0].model, "claude-3-5-sonnet-20241022");
-        assert_eq!(sessions[0].messages.len(), 2);
-        assert_eq!(sessions[0].messages[0].role, "user");
         assert_eq!(sessions[0].messages[1].role, "assistant");
     }
 
     #[test]
-    fn test_cursor_entry_effective_role() {
-        let entry = CursorChatEntry {
-            entry_type: "human".to_string(),
-            role: String::new(),
-            text: "hello".to_string(),
-            message: String::new(),
-            timestamp: None,
-            model: String::new(),
-        };
-        assert_eq!(entry.effective_role(), "user");
+    fn test_parse_windsurf_empty() {
+        let json = r#"{"tabs":[],"conversations":[]}"#;
+        let result = parse_windsurf_chat_json(json);
+        assert!(result.is_none());
+    }
 
-        let ai_entry = CursorChatEntry {
-            entry_type: "ai".to_string(),
+    #[test]
+    fn test_windsurf_entry_cascade_role() {
+        let entry = WindsurfEntry {
+            entry_type: "cascade".to_string(),
             role: String::new(),
             text: "response".to_string(),
+            content: String::new(),
             message: String::new(),
             timestamp: None,
-            model: "claude".to_string(),
+            model: "claude-3-5-sonnet".to_string(),
         };
-        assert_eq!(ai_entry.effective_role(), "assistant");
+        assert_eq!(entry.effective_role(), "assistant");
     }
 }
