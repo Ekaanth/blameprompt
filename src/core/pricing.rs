@@ -34,15 +34,26 @@ pub fn estimate_tokens_from_chars(char_count: usize) -> u64 {
     (char_count / 4) as u64
 }
 
+#[allow(clippy::if_same_then_else)]
 fn get_rates(model_lower: &str) -> (f64, f64) {
     // ── Anthropic (Claude) ──────────────────────────────────────────────
-    if model_lower.contains("opus-4-6") || model_lower.contains("opus-4-5") {
+    if model_lower.contains("opus-4-6")
+        || model_lower.contains("opus-4.6")
+        || model_lower.contains("4.6-opus")
+    {
         (5.00, 25.00)
+    } else if model_lower.contains("opus-4-5")
+        || model_lower.contains("opus-4.5")
+        || model_lower.contains("4.5-opus")
+    {
+        (15.00, 75.00)
     } else if model_lower.contains("opus-4-1")
         || model_lower.contains("opus-4-0")
         || model_lower.contains("opus-4-20")
     {
         (15.00, 75.00)
+    } else if model_lower.contains("sonnet-4.6") || model_lower.contains("4.6-sonnet") {
+        (3.00, 15.00)
     } else if model_lower.contains("sonnet") {
         (3.00, 15.00)
     } else if model_lower.contains("haiku-4-5") || model_lower.contains("haiku-4-") {
@@ -67,12 +78,12 @@ fn get_rates(model_lower: &str) -> (f64, f64) {
         (3.00, 12.00)
     } else if model_lower.contains("o1") {
         (15.00, 60.00)
-    } else if model_lower.contains("gpt-4.1") || model_lower.contains("gpt-4-1") {
-        (2.00, 8.00)
-    } else if model_lower.contains("gpt-4.1-mini") || model_lower.contains("gpt-4-1-mini") {
-        (0.40, 1.60)
     } else if model_lower.contains("gpt-4.1-nano") || model_lower.contains("gpt-4-1-nano") {
         (0.10, 0.40)
+    } else if model_lower.contains("gpt-4.1-mini") || model_lower.contains("gpt-4-1-mini") {
+        (0.40, 1.60)
+    } else if model_lower.contains("gpt-4.1") || model_lower.contains("gpt-4-1") {
+        (2.00, 8.00)
     } else if model_lower.contains("gpt-4o-mini") {
         (0.15, 0.60)
     } else if model_lower.contains("gpt-4o") {
@@ -88,7 +99,9 @@ fn get_rates(model_lower: &str) -> (f64, f64) {
         (2.00, 8.00)
     }
     // ── Google (Gemini) ─────────────────────────────────────────────────
-    else if model_lower.contains("gemini-2.5-pro") || model_lower.contains("gemini-2-5-pro") {
+    else if model_lower.contains("gemini-3.1-pro") || model_lower.contains("gemini-3-1-pro") {
+        (1.25, 10.00)
+    } else if model_lower.contains("gemini-2.5-pro") || model_lower.contains("gemini-2-5-pro") {
         (1.25, 10.00) // $1.25/M input (<200k), $10/M output
     } else if model_lower.contains("gemini-2.5-flash") || model_lower.contains("gemini-2-5-flash") {
         (0.15, 0.60)
@@ -98,9 +111,23 @@ fn get_rates(model_lower: &str) -> (f64, f64) {
         (1.25, 5.00)
     } else if model_lower.contains("gemini-1.5-flash") || model_lower.contains("gemini-1-5-flash") {
         (0.075, 0.30)
+    } else if model_lower.contains("gemini-3-flash") {
+        (0.075, 0.30)
     } else if model_lower.contains("gemini") {
         // Generic Gemini — default to Flash pricing
         (0.15, 0.60)
+    }
+    // ── Antigravity ─────────────────────────────────────────────────────
+    else if model_lower.contains("antigravity-ultra") {
+        (10.00, 40.00)
+    } else if model_lower.contains("antigravity-pro") {
+        (3.00, 15.00)
+    } else if model_lower.contains("antigravity-lite") {
+        (0.10, 0.40)
+    } else if model_lower.contains("gpt-oss-120b") {
+        (2.00, 8.00)
+    } else if model_lower.contains("antigravity") {
+        (10.00, 40.00) // Default to Ultra pricing
     }
     // ── Default ─────────────────────────────────────────────────────────
     else {
@@ -129,6 +156,17 @@ mod tests {
     fn test_opus_4_6_pricing() {
         let cost = estimate_cost("claude-opus-4-6", 1000, 500);
         let expected = (1000.0 / 1_000_000.0) * 5.0 + (500.0 / 1_000_000.0) * 25.0;
+        assert!((cost - expected).abs() < 0.0001);
+        // Dot notation should give the same price
+        let cost_dot = estimate_cost("claude-opus-4.6", 1000, 500);
+        assert!((cost_dot - expected).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_opus_4_5_pricing() {
+        // Opus 4.5 is the premium model ($15/$75)
+        let cost = estimate_cost("claude-opus-4-5", 1000, 500);
+        let expected = (1000.0 / 1_000_000.0) * 15.0 + (500.0 / 1_000_000.0) * 75.0;
         assert!((cost - expected).abs() < 0.0001);
     }
 
@@ -186,6 +224,17 @@ mod tests {
         let cost = estimate_cost("gemini-2.5-flash", 1000, 500);
         let expected = (1000.0 / 1_000_000.0) * 0.15 + (500.0 / 1_000_000.0) * 0.60;
         assert!((cost - expected).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_antigravity_pricing() {
+        let cost = estimate_cost("antigravity-ultra", 1000, 500);
+        let expected = (1000.0 / 1_000_000.0) * 10.0 + (500.0 / 1_000_000.0) * 40.0;
+        assert!((cost - expected).abs() < 0.0001);
+
+        let cost_lite = estimate_cost("antigravity-lite", 1000, 500);
+        let expected_lite = (1000.0 / 1_000_000.0) * 0.10 + (500.0 / 1_000_000.0) * 0.40;
+        assert!((cost_lite - expected_lite).abs() < 0.0001);
     }
 
     #[test]

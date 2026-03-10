@@ -48,7 +48,7 @@ fn ensure_staging_dir_in(base: &Path) {
 
 /// Returns true if `.blameprompt` or `.blameprompt/` is already covered by any
 /// gitignore source: local `.gitignore`, global excludesFile, or `.git/info/exclude`.
-fn is_blameprompt_ignored(base: &Path) -> bool {
+pub(crate) fn is_blameprompt_ignored(base: &Path) -> bool {
     let matches_pattern = |content: &str| {
         content
             .lines()
@@ -70,12 +70,22 @@ fn is_blameprompt_ignored(base: &Path) -> bool {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .or_else(|| {
-            dirs::home_dir()
-                .map(|h| h.join(".gitignore_global").to_string_lossy().to_string())
+            dirs::home_dir().map(|h| h.join(".gitignore_global").to_string_lossy().to_string())
         });
 
     if let Some(path) = global_path {
-        let p = std::path::Path::new(&path);
+        let expanded = if path.starts_with("~/") {
+            dirs::home_dir()
+                .map(|h| h.join(&path[2..]).to_string_lossy().to_string())
+                .unwrap_or(path)
+        } else if path == "~" {
+            dirs::home_dir()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or(path)
+        } else {
+            path
+        };
+        let p = std::path::Path::new(&expanded);
         if p.exists() && matches_pattern(&std::fs::read_to_string(p).unwrap_or_default()) {
             return true;
         }
@@ -89,7 +99,6 @@ fn is_blameprompt_ignored(base: &Path) -> bool {
 
     false
 }
-
 
 /// Insert or update a receipt in the staging file at `base_dir`.
 /// Deduplicates by (session_id, prompt_number) so each user prompt in a session
@@ -248,6 +257,12 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
             merged
         };
 
+        // Preserve prompt_quality: set once at UserPromptSubmit, keep if already present.
+        let keep_prompt_quality = existing
+            .prompt_quality
+            .clone()
+            .or(receipt.prompt_quality.clone());
+
         // Update the receipt in place
         *existing = receipt.clone();
         existing.id = original_id;
@@ -277,6 +292,7 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
         existing.subagent_activities = keep_subagent_activities;
         existing.concurrent_tool_calls = keep_concurrent_tool_calls;
         existing.user_decisions = keep_user_decisions;
+        existing.prompt_quality = keep_prompt_quality;
 
         // Keep legacy fields pointing at first file
         if let Some(first) = existing.files_changed.first() {
@@ -304,6 +320,12 @@ fn write_staging_data(data: &StagingData, path: &Path, tmp_path: &Path) {
             if let Err(e) = std::fs::write(tmp_path, &json) {
                 eprintln!("[blameprompt] Failed to write staging file: {}", e);
                 return;
+            }
+            #[cfg(windows)]
+            {
+                if path.exists() {
+                    let _ = std::fs::remove_file(path);
+                }
             }
             if let Err(e) = std::fs::rename(tmp_path, path) {
                 eprintln!("[blameprompt] Failed to rename staging file: {}", e);
@@ -453,6 +475,7 @@ mod tests {
             prompt_duration_secs: None,
             accepted_lines: None,
             overridden_lines: None,
+            prompt_quality: None,
         }
     }
 

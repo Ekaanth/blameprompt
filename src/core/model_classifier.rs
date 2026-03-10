@@ -50,6 +50,8 @@ pub fn classify(model_id: &str) -> ModelClassification {
             "Claude Opus 4.1"
         } else if lower.contains("opus-4-0") || lower.contains("opus-4-20") {
             "Claude Opus 4.0"
+        } else if lower.contains("sonnet-4-6") {
+            "Claude Sonnet 4.6"
         } else if lower.contains("sonnet-4-5") {
             "Claude Sonnet 4.5"
         } else if lower.contains("sonnet-4-0") || lower.contains("sonnet-4-20") {
@@ -68,6 +70,7 @@ pub fn classify(model_id: &str) -> ModelClassification {
         || lower.contains("gpt-3.5")
         || lower.contains("o1")
         || lower.contains("o3")
+        || lower.contains("o4")
     {
         let display = if lower.contains("gpt-4o") {
             "GPT-4o"
@@ -75,6 +78,10 @@ pub fn classify(model_id: &str) -> ModelClassification {
             "GPT-4"
         } else if lower.contains("gpt-3.5") {
             "GPT-3.5"
+        } else if lower.contains("o4-mini") {
+            "o4-mini"
+        } else if lower.contains("o4") {
+            "o4"
         } else {
             "OpenAI"
         };
@@ -122,6 +129,22 @@ pub fn classify(model_id: &str) -> ModelClassification {
             "replit",
             ModelLicense::ClosedSource,
             "Replit Agent",
+        )
+    } else if lower.contains("antigravity") {
+        let display = if lower.contains("ultra") {
+            "Antigravity Ultra"
+        } else if lower.contains("pro") {
+            "Antigravity Pro"
+        } else if lower.contains("lite") {
+            "Antigravity Lite"
+        } else {
+            "Antigravity"
+        };
+        (
+            "antigravity",
+            "antigravity",
+            ModelLicense::ClosedSource,
+            display,
         )
     } else {
         (
@@ -227,5 +250,13 @@ mod tests {
             "Claude Sonnet 4.5"
         );
         assert_eq!(display_name("claude-opus-4-6"), "Claude Opus 4.6");
+    }
+
+    #[test]
+    fn test_antigravity_classification() {
+        let c = classify("antigravity-ultra");
+        assert_eq!(c.family, "antigravity");
+        assert_eq!(c.vendor, "antigravity");
+        assert_eq!(c.display_name, "Antigravity Ultra");
     }
 }

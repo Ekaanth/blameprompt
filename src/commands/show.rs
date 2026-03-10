@@ -1,5 +1,5 @@
 use crate::commands::audit;
-use crate::core::util;
+use crate::core::{prompt_eval, util};
 use crate::git::notes;
 use comfy_table::Table;
 
@@ -79,6 +79,7 @@ pub fn run(commit: &str, format: &str) {
         "Session",
         "Messages",
         "Cost",
+        "Quality",
         "File",
         "Lines",
         "Timestamp",
@@ -94,6 +95,11 @@ pub fn run(commit: &str, format: &str) {
         };
         let ts = r.timestamp.format("%Y-%m-%d %H:%M").to_string();
         let prompt: String = r.prompt_summary.chars().take(40).collect();
+        let quality_badge = r
+            .prompt_quality
+            .as_ref()
+            .map(prompt_eval::score_badge)
+            .unwrap_or_else(|| "-".to_string());
 
         let file_changes = r.all_file_changes();
         let files_display = if file_changes.len() == 1 {
@@ -108,6 +114,7 @@ pub fn run(commit: &str, format: &str) {
             session_short,
             &r.message_count.to_string(),
             &format!("${:.4}", r.cost_usd),
+            &quality_badge,
             &files_display,
             &r.total_lines_changed().to_string(),
             &ts,

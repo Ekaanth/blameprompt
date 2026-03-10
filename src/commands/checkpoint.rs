@@ -1,6 +1,6 @@
 use crate::commands::staging;
 use crate::core::{
-    config, pricing,
+    config, pricing, prompt_eval,
     receipt::{DecisionOption, FileChange, Receipt, SubagentActivity, UserDecision},
     redact, transcript, util,
 };
@@ -52,7 +52,7 @@ fn parse_hook_input(json_str: &str) -> HookInput {
     // Write/Edit/Read: top-level file_path field.
     // MultiEdit: edits[].file_path array.
     let file_paths = if let Some(fp) = tool_input
-        .and_then(|ti| ti.get("file_path"))
+        .and_then(|ti| ti.get("file_path").or_else(|| ti.get("path")))
         .and_then(|v| v.as_str())
     {
         vec![fp.to_string()]
@@ -64,6 +64,7 @@ fn parse_hook_input(json_str: &str) -> HookInput {
             .iter()
             .filter_map(|edit| {
                 edit.get("file_path")
+                    .or_else(|| edit.get("path"))
                     .and_then(|v| v.as_str())
                     .map(String::from)
             })
@@ -265,20 +266,25 @@ pub fn run(agent: &str, hook_input_source: &str) {
     let input = parse_hook_input(&json_str);
 
     match input.hook_event_name.as_deref() {
-        Some("UserPromptSubmit") => {
-            // Fires the moment the user submits a prompt, before Claude responds.
-            // Creates an initial receipt immediately so the prompt appears in staging
-            // in real-time, parallel to the session in progress.
+        Some("UserPromptSubmit" | "BeforeTool") => {
+            // UserPromptSubmit: Claude Code event
+            // BeforeTool: Gemini CLI event
             handle_user_prompt_submit(agent, &input);
         }
-        Some("PostToolUse") => match input.tool_name.as_deref() {
-            Some("Write" | "Edit" | "MultiEdit") => {
+        Some("PostToolUse" | "AfterTool") => match input.tool_name.as_deref() {
+            Some("Write" | "Edit" | "MultiEdit" | "write_file" | "replace") => {
                 handle_file_change(agent, &input);
             }
             Some("AskUserQuestion") => {
                 handle_ask_user_question(&input);
             }
-            _ => {}
+            _ => {
+                // For other tools in Gemini CLI, if it's AfterTool, we might want to
+                // finalize things or at least track tool usage.
+                if input.hook_event_name.as_deref() == Some("AfterTool") {
+                    handle_stop(agent, &input);
+                }
+            }
         },
         Some("Stop") => {
             // Finalizes the current prompt's receipt with conversation, tools, and cost.
@@ -289,7 +295,7 @@ pub fn run(agent: &str, hook_input_source: &str) {
             handle_subagent_start(&input);
         }
         Some("SubagentStop") => {
-            handle_subagent_stop(&input);
+            handle_subagent_stop(agent, &input);
         }
         _ => {} // skip all other events
     }
@@ -306,11 +312,16 @@ struct TranscriptContext {
     message_count: u32,
 }
 
-fn build_context(input: &HookInput) -> Option<TranscriptContext> {
+fn build_context(input: &HookInput, agent: &str) -> Option<TranscriptContext> {
     let transcript_path = input.transcript_path.as_ref()?;
     let cwd = input.cwd.clone().unwrap_or_else(|| ".".to_string());
 
-    let parsed = transcript::parse_claude_jsonl(transcript_path).ok()?;
+    let parsed = if agent == "gemini" || agent == "antigravity" {
+        crate::integrations::gemini::parse_gemini_session(Path::new(transcript_path))
+            .map(|s| s.to_transcript_result())?
+    } else {
+        transcript::parse_claude_jsonl(transcript_path).ok()?
+    };
     let cfg = config::load_config();
     let model = parsed
         .model
@@ -450,7 +461,7 @@ fn handle_user_prompt_submit(agent: &str, input: &HookInput) {
 
     // Try to build full transcript context; if it fails or has 0 prompts, fall back.
     let (prompt_number, model, session_id, prompt_hash, session_start, message_count) =
-        if let Some(ctx) = build_context(input) {
+        if let Some(ctx) = build_context(input, agent) {
             let count = transcript::count_user_prompts(&ctx.parsed.transcript);
             if count == 0 {
                 // Transcript doesn't have the user message yet — fall back to payload-only.
@@ -530,6 +541,9 @@ fn handle_user_prompt_submit(agent: &str, input: &HookInput) {
         return;
     }
 
+    // Evaluate prompt quality
+    let prompt_quality = Some(prompt_eval::evaluate(&prompt_summary));
+
     let user = util::git_user();
 
     // Detect session continuation (context exhaustion → new session)
@@ -563,6 +577,7 @@ fn handle_user_prompt_submit(agent: &str, input: &HookInput) {
         prompt_duration_secs: None,            // Computed at Stop time
         accepted_lines: None,
         overridden_lines: None,
+        prompt_quality,
         user,
         file_path: String::new(),
         line_range: (0, 0),
@@ -592,7 +607,7 @@ fn handle_user_prompt_submit(agent: &str, input: &HookInput) {
 
 /// Handle PostToolUse for Write/Edit/MultiEdit — creates a receipt with file changes.
 fn handle_file_change(agent: &str, input: &HookInput) {
-    let ctx = match build_context(input) {
+    let ctx = match build_context(input, agent) {
         Some(c) => c,
         None => return,
     };
@@ -663,6 +678,9 @@ fn handle_file_change(agent: &str, input: &HookInput) {
     // Per-prompt cost/tokens — avoids the cumulative full-session totals
     let (prompt_cost, prompt_tokens) = prompt_cost_and_tokens(&ctx, prompt_number);
 
+    // Evaluate prompt quality
+    let prompt_quality = Some(prompt_eval::evaluate(&prompt_summary));
+
     let receipt = Receipt {
         id: Receipt::new_id(),
         provider: agent.to_string(),
@@ -686,6 +704,7 @@ fn handle_file_change(agent: &str, input: &HookInput) {
         prompt_duration_secs: None, // Computed at Stop time
         accepted_lines: None,
         overridden_lines: None,
+        prompt_quality,
         user: ctx.user,
         file_path: files_changed
             .first()
@@ -811,7 +830,7 @@ fn handle_ask_user_question(input: &HookInput) {
 /// Handle Stop event — ensure every user prompt in the session has a receipt,
 /// even if no files were modified (e.g. a simple "hi" prompt).
 fn handle_stop(agent: &str, input: &HookInput) {
-    let ctx = match build_context(input) {
+    let ctx = match build_context(input, agent) {
         Some(c) => c,
         None => return,
     };
@@ -921,6 +940,7 @@ fn handle_stop(agent: &str, input: &HookInput) {
                         prompt_duration_secs: None,
                         accepted_lines: None,
                         overridden_lines: None,
+                        prompt_quality: None,
                         user: ctx.user.clone(),
                         file_path: missing_files
                             .first()
@@ -1042,6 +1062,9 @@ fn handle_stop(agent: &str, input: &HookInput) {
     let prompt_ts =
         transcript::timestamp_for_prompt(&ctx.parsed, current_pn).unwrap_or_else(Utc::now);
 
+    // Evaluate prompt quality for the current prompt
+    let current_quality = Some(prompt_eval::evaluate(&current_summary));
+
     let current_receipt = Receipt {
         id: Receipt::new_id(),
         provider: agent.to_string(),
@@ -1065,6 +1088,7 @@ fn handle_stop(agent: &str, input: &HookInput) {
         prompt_duration_secs, // Wall-clock time for this specific prompt only
         accepted_lines: None,
         overridden_lines: None,
+        prompt_quality: current_quality,
         user: ctx.user.clone(),
         file_path: String::new(),
         line_range: (0, 0),
@@ -1144,6 +1168,8 @@ fn handle_stop(agent: &str, input: &HookInput) {
         // Use the actual prompt timestamp from the JSONL for backfilled receipts.
         let pn_ts = transcript::timestamp_for_prompt(&ctx.parsed, pn).unwrap_or_else(Utc::now);
 
+        let pn_quality = Some(prompt_eval::evaluate(&prompt_summary));
+
         let receipt = Receipt {
             id: Receipt::new_id(),
             provider: agent.to_string(),
@@ -1167,6 +1193,7 @@ fn handle_stop(agent: &str, input: &HookInput) {
             prompt_duration_secs: None,
             accepted_lines: None,
             overridden_lines: None,
+            prompt_quality: pn_quality,
             user: ctx.user.clone(),
             file_path: String::new(),
             line_range: (0, 0),
@@ -1204,9 +1231,10 @@ fn handle_subagent_start(input: &HookInput) {
         None => return,
     };
 
-    let existing = staging::read_staging_in(Path::new(&cwd));
-    // Find the most recent receipt for this session
-    let last_pn = existing
+    let mut data = staging::read_staging_in(Path::new(&cwd));
+
+    // Find the most recent prompt number for this session
+    let last_pn = data
         .receipts
         .iter()
         .filter(|r| r.session_id == session_id)
@@ -1228,8 +1256,6 @@ fn handle_subagent_start(input: &HookInput) {
         tools_used: vec![],
     };
 
-    // Read current receipt and add the activity
-    let mut data = staging::read_staging_in(Path::new(&cwd));
     if let Some(receipt) = data
         .receipts
         .iter_mut()
@@ -1252,7 +1278,7 @@ fn handle_subagent_start(input: &HookInput) {
 
 /// Handle SubagentStop — a Task tool subagent has completed.
 /// Updates the matching SubagentActivity to "completed" and extracts tools used.
-fn handle_subagent_stop(input: &HookInput) {
+fn handle_subagent_stop(agent: &str, input: &HookInput) {
     let cwd = input.cwd.clone().unwrap_or_else(|| ".".to_string());
     let session_id = match input.session_id.as_ref() {
         Some(s) => s.clone(),
@@ -1263,7 +1289,14 @@ fn handle_subagent_stop(input: &HookInput) {
     let subagent_tools: Vec<String> = input
         .agent_transcript_path
         .as_ref()
-        .and_then(|path| transcript::parse_claude_jsonl(path).ok())
+        .and_then(|path| {
+            if agent == "gemini" || agent == "antigravity" {
+                crate::integrations::gemini::parse_gemini_session(Path::new(path))
+                    .map(|s| s.to_transcript_result())
+            } else {
+                transcript::parse_claude_jsonl(path).ok()
+            }
+        })
         .map(|parsed| transcript::extract_tools_used(&parsed.transcript))
         .unwrap_or_default();
 

@@ -183,6 +183,7 @@ pub fn search_prompts(query: &str, limit: usize) -> Result<Vec<(String, Receipt)
                     prompt_duration_secs: None,
                     accepted_lines: None,
                     overridden_lines: None,
+                    prompt_quality: None,
                 },
             ))
         })

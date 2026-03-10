@@ -466,6 +466,8 @@ pub fn run_record_windsurf(workspace: Option<&str>) {
             })
             .collect();
 
+        let prompt_quality = Some(crate::core::prompt_eval::evaluate(&prompt_summary));
+
         let receipt = Receipt {
             id: Receipt::new_id(),
             provider: "windsurf".to_string(),
@@ -515,6 +517,7 @@ pub fn run_record_windsurf(workspace: Option<&str>) {
             prompt_duration_secs: None,
             accepted_lines: None,
             overridden_lines: None,
+            prompt_quality,
         };
 
         staging::upsert_receipt(&receipt);

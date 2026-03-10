@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-03-10
+
+### Added
+
+- **Antigravity IDE integration** — New `blameprompt record-antigravity` and `blameprompt install-antigravity` commands. Full session import with auto-detection of Antigravity-native models, Gemini 2.x/3.x, and Claude models served through the Antigravity platform. Installs `.agent/rules/blameprompt.md` and `.agent/workflows/checkpoint.md` for automatic provenance tracking.
+- **Prompt quality evaluation engine** 4-dimension weighted scoring system. Scores prompts on Clarity (30%), Actionability (25%), Context (25%), and Efficiency (20%). Classifies prompts into categories: bug_fix, code_generation, question, refactor, command, clarification, file_operation, continuation.
+- **Prompt category distribution in reports** — `blameprompt report` now shows prompt category breakdown (bug fixes vs. code generation vs. refactoring, etc.) and anti-pattern analysis (verbose prompts, minimal responses, vague language).
+- **Git notes merge on attach** — `blameprompt attach` now merges with existing notes on a commit instead of overwriting, preventing receipt loss on amend or multi-stage workflows.
+- **Duplicate fetch-refspec prevention** — `blameprompt pull` no longer appends duplicate `remote.origin.fetch` entries for `refs/notes/blameprompt`.
+
+### Fixed
+
+- **Opus 4.5 / 4.6 pricing bug** — `opus-4-6` and `opus-4.6` (dot vs hyphen notation) were mapped to different price tiers ($5/$25 vs $15/$75). Both now correctly resolve to the same rate. Opus 4.5 was incorrectly priced at the 4.6 tier; now correctly set to $15/$75.
+- **Missing model classifier entries** — Added `sonnet-4-6` ("Claude Sonnet 4.6") and `o4`/`o4-mini` display names. Previously fell through to "Claude (unknown)" and unclassified respectively.
+- **Duplicated `is_blameprompt_ignored` function** — Removed ~55-line duplicate from `init_hooks.rs`; now delegates to the canonical implementation in `staging.rs`.
+- **Prevent silent re-installation after uninstall** — `blameprompt uninstall` now writes a sentinel marker; `auto_setup()` respects it and will not silently reinstall hooks.
+- **Duplicate `.blameprompt` gitignore entries** — Checks local `.gitignore`, global `core.excludesFile`, and `.git/info/exclude` before appending, preventing duplicate lines.
+- **Self-updater version pinning** — `blameprompt update` now targets a specific release version instead of always pulling latest.
+
+### Changed
+
+- Prompt evaluation now runs at receipt creation time across all providers (Claude, Gemini, Cursor, Codex, Copilot, Windsurf, Antigravity), not just at report generation.
+- Rating tiers: Excellent (90+), Good (70-89), Fair (50-69), Poor (<50).
+- 37 new unit tests for prompt evaluation covering scoring, classification, false positives, edge cases, and backward compatibility.
+- Total test count: 186 (up from 159 in v0.2.0).
+
+### Technical
+
+- `PromptQuality` struct extended with backward-compatible `category: Option<String>` field.
+- `staging::is_blameprompt_ignored` promoted to `pub(crate)` to eliminate cross-module duplication.
+- Verb stemming, CLI command detection, minimal response detection, and file extension boundary matching in the evaluation engine.
+- Continuation prompts auto-detected and scored as "Good" (score 75) to avoid penalizing context-window resumptions.
+
 ## [0.2.0] - 2026-03-03
 
 ### Added
@@ -65,4 +98,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 42 unit tests covering receipts, redaction, pricing, model classification, sessions, transcripts, staging, and config.
 - Zero compiler warnings, zero clippy warnings.
 
+[0.3.0]: https://github.com/ekaanth/blameprompt/releases/tag/v0.3.0
+[0.2.0]: https://github.com/ekaanth/blameprompt/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ekaanth/blameprompt/releases/tag/v0.1.0

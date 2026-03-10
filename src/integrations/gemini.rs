@@ -32,6 +32,41 @@ pub struct GeminiMessage {
     pub text: String,
 }
 
+impl GeminiSession {
+    pub fn to_transcript_result(&self) -> crate::core::transcript::TranscriptParseResult {
+        use crate::core::transcript::{Message, Transcript, TranscriptParseResult};
+        let messages = self
+            .messages
+            .iter()
+            .map(|m| {
+                if m.role == "user" {
+                    Message::User {
+                        text: m.text.clone(),
+                    }
+                } else {
+                    Message::Assistant {
+                        text: m.text.clone(),
+                        model: Some(self.model.clone()),
+                        usage: None,
+                    }
+                }
+            })
+            .collect();
+
+        TranscriptParseResult {
+            transcript: Transcript { messages },
+            model: Some(self.model.clone()),
+            session_id: self.session_id.clone(),
+            files_modified: self.files_modified.clone(),
+            session_start: Some(self.timestamp),
+            session_end: Some(self.timestamp),
+            session_duration_secs: None,
+            avg_response_time_secs: None,
+            user_prompt_timestamps: vec![],
+        }
+    }
+}
+
 /// Locate the Gemini CLI sessions directory.
 pub fn find_sessions_dir() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
@@ -356,6 +391,8 @@ pub fn import_session(path: &Path) -> Option<Receipt> {
         0.0
     };
 
+    let prompt_quality = Some(crate::core::prompt_eval::evaluate(&prompt_summary));
+
     Some(Receipt {
         id: Receipt::new_id(),
         provider: "gemini".to_string(),
@@ -400,16 +437,17 @@ pub fn import_session(path: &Path) -> Option<Receipt> {
         prompt_duration_secs: None,
         accepted_lines: None,
         overridden_lines: None,
+        prompt_quality,
     })
 }
 
-/// Main entry point: scan Gemini CLI sessions and create receipts.
-pub fn run_record_gemini(session_path: Option<&str>) {
-    let files = if let Some(path) = session_path {
+/// Resolve session files from an optional path or the default directory.
+pub fn resolve_session_files(session_path: Option<&str>) -> Vec<PathBuf> {
+    if let Some(path) = session_path {
         let p = PathBuf::from(path);
         if !p.exists() {
-            eprintln!("[gemini] File not found: {}", path);
-            std::process::exit(1);
+            eprintln!("File not found: {}", path);
+            return vec![];
         }
         if p.is_dir() {
             list_session_files(&p)
@@ -421,18 +459,26 @@ pub fn run_record_gemini(session_path: Option<&str>) {
             Some(dir) => {
                 let files = list_session_files(&dir);
                 if files.is_empty() {
-                    eprintln!("[gemini] No session files found in {}", dir.display());
-                    return;
+                    eprintln!("No session files found in {}", dir.display());
+                    return vec![];
                 }
                 files.into_iter().take(10).collect()
             }
             None => {
-                eprintln!("[gemini] Cannot find Gemini CLI sessions directory.");
+                eprintln!("Cannot find Gemini CLI sessions directory.");
                 eprintln!("  Pass --session <path> to specify a transcript file.");
-                std::process::exit(1);
+                vec![]
             }
         }
-    };
+    }
+}
+
+/// Main entry point: scan Gemini CLI sessions and create receipts.
+pub fn run_record_gemini(session_path: Option<&str>) {
+    let files = resolve_session_files(session_path);
+    if files.is_empty() {
+        return;
+    }
 
     let mut count = 0usize;
     for file in &files {
@@ -501,9 +547,16 @@ pub fn install_hooks() -> Result<(), String> {
         "command": command
     }]);
 
-    for event in &["BeforeTool", "AfterTool"] {
+    for event in &[
+        "BeforeTool",
+        "AfterTool",
+        "UserPromptSubmit",
+        "Stop",
+        "SubagentStart",
+        "SubagentStop",
+    ] {
         let entry = serde_json::json!({
-            "matcher": "write_file|replace",
+            "matcher": if event.contains("Tool") { "write_file|replace" } else { "*" },
             "hooks": hook_cmd
         });
         if hooks.get(*event).is_none() {

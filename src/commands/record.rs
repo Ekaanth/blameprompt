@@ -135,6 +135,7 @@ pub fn run(session_path: &str, provider: Option<&str>) {
         prompt_duration_secs: None,
         accepted_lines: None,
         overridden_lines: None,
+        prompt_quality: Some(crate::core::prompt_eval::evaluate(&prompt_summary)),
     };
 
     staging::upsert_receipt(&receipt);

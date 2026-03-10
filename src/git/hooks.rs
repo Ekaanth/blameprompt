@@ -87,7 +87,6 @@ fi
     )
 }
 
-
 fn post_merge_hook(binary: &str) -> String {
     format!(
         r#"# BlamePrompt post-merge hook (do not edit between markers)

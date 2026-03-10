@@ -7,7 +7,21 @@ pub fn attach_receipts_to_head(staging: &StagingData) -> Result<(), String> {
         return Ok(());
     }
 
-    let payload = NotePayload::new(staging.receipts.clone());
+    // Merge with existing notes if present
+    let mut receipts = if let Some(existing) = read_receipts_for_commit("HEAD") {
+        existing.receipts
+    } else {
+        Vec::new()
+    };
+
+    // Add new receipts, avoiding duplicates by ID
+    for r in &staging.receipts {
+        if !receipts.iter().any(|existing| existing.id == r.id) {
+            receipts.push(r.clone());
+        }
+    }
+
+    let payload = NotePayload::new(receipts);
     let json = serde_json::to_string_pretty(&payload)
         .map_err(|e| format!("Failed to serialize: {}", e))?;
 

@@ -96,7 +96,9 @@ pub fn uninstall() -> Result<(), String> {
     let shim = shim_path().ok_or("Cannot determine home directory")?;
     if shim.exists() {
         std::fs::remove_file(&shim).map_err(|e| format!("Cannot remove git shim: {}", e))?;
-        println!("  \x1b[1;32m[done]\x1b[0m Removed git shim \x1b[2m(~/.blameprompt/bin/git)\x1b[0m");
+        println!(
+            "  \x1b[1;32m[done]\x1b[0m Removed git shim \x1b[2m(~/.blameprompt/bin/git)\x1b[0m"
+        );
     }
     Ok(())
 }
@@ -177,10 +179,7 @@ pub(crate) fn remove_blameprompt_path_block(content: &str) -> String {
         "",
     );
     // Remove the export line
-    result = result.replace(
-        "export PATH=\"$HOME/.blameprompt/bin:$PATH\"\n",
-        "",
-    );
+    result = result.replace("export PATH=\"$HOME/.blameprompt/bin:$PATH\"\n", "");
     // Collapse any resulting double blank lines
     while result.contains("\n\n\n") {
         result = result.replace("\n\n\n", "\n\n");

@@ -1,3 +1,4 @@
+use crate::core::prompt_eval::PromptQuality;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -178,6 +179,9 @@ pub struct Receipt {
     pub user_decisions: Vec<UserDecision>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation: Option<Vec<ConversationTurn>>,
+    /// Prompt quality assessment from the evaluation engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_quality: Option<PromptQuality>,
 }
 
 fn default_line_range() -> (u32, u32) {
@@ -388,6 +392,7 @@ mod tests {
             prompt_duration_secs: None,
             accepted_lines: None,
             overridden_lines: None,
+            prompt_quality: None,
         };
 
         let json = serde_json::to_string_pretty(&receipt).unwrap();
@@ -443,6 +448,7 @@ mod tests {
             prompt_duration_secs: None,
             accepted_lines: None,
             overridden_lines: None,
+            prompt_quality: None,
         };
 
         let json = serde_json::to_string(&receipt).unwrap();
@@ -532,6 +538,7 @@ mod tests {
             prompt_duration_secs: None,
             accepted_lines: None,
             overridden_lines: None,
+            prompt_quality: None,
         };
         let changes = receipt.all_file_changes();
         assert_eq!(changes.len(), 2);
@@ -581,6 +588,7 @@ mod tests {
             prompt_duration_secs: None,
             accepted_lines: None,
             overridden_lines: None,
+            prompt_quality: None,
         };
         let changes = receipt.all_file_changes();
         assert_eq!(changes.len(), 1);

@@ -1,5 +1,6 @@
 use crate::commands::audit;
 use crate::commands::audit::relative_path;
+use crate::core::prompt_eval;
 use crate::core::receipt::Receipt;
 use crate::core::{model_classifier, redact, session_stats};
 use chrono::Utc;
@@ -92,7 +93,10 @@ pub fn generate_report(
     // Section 10: Prompt Details
     write_prompt_details(&mut md, &entries);
 
-    // Section 11: Recommendations
+    // Section 11: Prompt Effectiveness
+    write_prompt_effectiveness(&mut md, &all_receipts);
+
+    // Section 12: Recommendations
     write_recommendations(&mut md, &all_receipts, &classifications, &security_findings);
 
     // Footer
@@ -942,6 +946,203 @@ fn write_prompt_details(md: &mut String, entries: &[audit::AuditEntry]) {
     }
 }
 
+fn write_prompt_effectiveness(md: &mut String, receipts: &[&Receipt]) {
+    writeln!(md, "## Prompt Effectiveness\n").ok();
+
+    // Collect all receipts that have quality scores
+    let scored: Vec<_> = receipts
+        .iter()
+        .filter_map(|r| r.prompt_quality.as_ref().map(|q| (*r, q)))
+        .collect();
+
+    if scored.is_empty() {
+        writeln!(
+            md,
+            "No prompt quality data available. Prompt evaluation runs automatically on new receipts.\n"
+        )
+        .ok();
+        return;
+    }
+
+    let total = scored.len();
+    let avg_score: f64 = scored.iter().map(|(_, q)| q.score as f64).sum::<f64>() / total as f64;
+
+    // Score distribution
+    let excellent = scored.iter().filter(|(_, q)| q.score >= 90).count();
+    let good = scored
+        .iter()
+        .filter(|(_, q)| q.score >= 75 && q.score < 90)
+        .count();
+    let fair = scored
+        .iter()
+        .filter(|(_, q)| q.score >= 50 && q.score < 75)
+        .count();
+    let poor = scored.iter().filter(|(_, q)| q.score < 50).count();
+
+    writeln!(
+        md,
+        "**Average Prompt Quality Score: {:.0}/100**\n",
+        avg_score
+    )
+    .ok();
+    writeln!(md, "| Rating | Count | % |").ok();
+    writeln!(md, "|--------|------:|---:|").ok();
+    writeln!(
+        md,
+        "| Excellent (90-100) | {} | {:.0}% |",
+        excellent,
+        excellent as f64 / total as f64 * 100.0
+    )
+    .ok();
+    writeln!(
+        md,
+        "| Good (75-89) | {} | {:.0}% |",
+        good,
+        good as f64 / total as f64 * 100.0
+    )
+    .ok();
+    writeln!(
+        md,
+        "| Fair (50-74) | {} | {:.0}% |",
+        fair,
+        fair as f64 / total as f64 * 100.0
+    )
+    .ok();
+    writeln!(
+        md,
+        "| Poor (<50) | {} | {:.0}% |",
+        poor,
+        poor as f64 / total as f64 * 100.0
+    )
+    .ok();
+
+    // Prompt category distribution
+    let mut category_counts: HashMap<&str, usize> = HashMap::new();
+    for (_, q) in &scored {
+        if let Some(ref cat) = q.category {
+            *category_counts.entry(cat.as_str()).or_insert(0) += 1;
+        }
+    }
+    if !category_counts.is_empty() {
+        writeln!(md, "\n### Prompt Categories\n").ok();
+        writeln!(md, "| Category | Count | % |").ok();
+        writeln!(md, "|----------|------:|---:|").ok();
+        let mut cats: Vec<_> = category_counts.into_iter().collect();
+        cats.sort_by_key(|b| std::cmp::Reverse(b.1));
+        for (cat, count) in &cats {
+            writeln!(
+                md,
+                "| {} | {} | {:.0}% |",
+                cat,
+                count,
+                *count as f64 / total as f64 * 100.0
+            )
+            .ok();
+        }
+    }
+
+    // Most common issues
+    let mut issue_counts: HashMap<&str, usize> = HashMap::new();
+    for (_, q) in &scored {
+        for issue in &q.issues {
+            *issue_counts.entry(issue.as_str()).or_insert(0) += 1;
+        }
+    }
+    if !issue_counts.is_empty() {
+        let mut sorted_issues: Vec<_> = issue_counts.into_iter().collect();
+        sorted_issues.sort_by_key(|b| std::cmp::Reverse(b.1));
+
+        writeln!(md, "\n### Common Prompting Anti-patterns\n").ok();
+        writeln!(md, "| Issue | Count | Description |").ok();
+        writeln!(md, "|-------|------:|-------------|").ok();
+        for (issue, count) in sorted_issues.iter().take(10) {
+            let description = match *issue {
+                "no_file_reference" => "No file path or location mentioned",
+                "vague_language" => "Uses vague phrases like \"fix it\" or \"make it work\"",
+                "weak_action_verb" => {
+                    "Starts with a weak verb (make, do, change) instead of a specific action"
+                }
+                "too_short" => "Prompt is too short to provide adequate context",
+                "empty_prompt" => "Empty prompt submitted",
+                "verbose" => "Prompt exceeds 500 words — consider being more concise",
+                "minimal_response" => "Minimal response (yes/no/ok) — not a real prompt",
+                _ => issue,
+            };
+            writeln!(md, "| `{}` | {} | {} |", issue, count, description).ok();
+        }
+    }
+
+    // Correlation: prompt quality vs cost efficiency
+    // Group by quality tier and show average cost and iterations
+    let mut tier_stats: HashMap<&str, (f64, f64, usize)> = HashMap::new(); // (total_cost, total_tokens, count)
+    for (r, q) in &scored {
+        let tier = match q.score {
+            75..=100 => "High quality (75+)",
+            50..=74 => "Medium quality (50-74)",
+            _ => "Low quality (<50)",
+        };
+        let entry = tier_stats.entry(tier).or_insert((0.0, 0.0, 0));
+        entry.0 += r.cost_usd;
+        entry.1 += r.output_tokens.unwrap_or(0) as f64;
+        entry.2 += 1;
+    }
+    if tier_stats.len() > 1 {
+        writeln!(md, "\n### Quality vs Cost Correlation\n").ok();
+        writeln!(
+            md,
+            "| Quality Tier | Prompts | Avg Cost | Avg Output Tokens |"
+        )
+        .ok();
+        writeln!(
+            md,
+            "|--------------|--------:|---------:|------------------:|"
+        )
+        .ok();
+        for tier in &[
+            "High quality (75+)",
+            "Medium quality (50-74)",
+            "Low quality (<50)",
+        ] {
+            if let Some((total_cost, total_tokens, count)) = tier_stats.get(tier) {
+                writeln!(
+                    md,
+                    "| {} | {} | ${:.4} | {:.0} |",
+                    tier,
+                    count,
+                    total_cost / *count as f64,
+                    total_tokens / *count as f64
+                )
+                .ok();
+            }
+        }
+    }
+
+    // Top 3 best and worst prompts
+    let mut by_score: Vec<_> = scored.clone();
+    by_score.sort_by_key(|b| std::cmp::Reverse(b.1.score));
+
+    if by_score.len() >= 3 {
+        writeln!(md, "\n### Highest-Scoring Prompts\n").ok();
+        for (r, q) in by_score.iter().take(3) {
+            let badge = prompt_eval::score_badge(q);
+            let summary: String = r.prompt_summary.chars().take(80).collect();
+            writeln!(md, "- {} `{}`", badge, summary).ok();
+        }
+
+        writeln!(md, "\n### Lowest-Scoring Prompts\n").ok();
+        for (r, q) in by_score.iter().rev().take(3) {
+            if q.score < 75 {
+                let badge = prompt_eval::score_badge(q);
+                let summary: String = r.prompt_summary.chars().take(80).collect();
+                let issues_str = q.issues.join(", ");
+                writeln!(md, "- {} `{}` — {}", badge, summary, issues_str).ok();
+            }
+        }
+    }
+
+    writeln!(md).ok();
+}
+
 fn write_recommendations(
     md: &mut String,
     receipts: &[&Receipt],
@@ -1002,6 +1203,26 @@ fn write_recommendations(
         )
         .ok();
         writeln!(md, "   Consider local models (Ollama + DeepSeek/Llama) for non-sensitive code to reduce costs.\n").ok();
+        rec_num += 1;
+    }
+
+    // Prompt quality
+    let poor_prompts = receipts
+        .iter()
+        .filter(|r| r.prompt_quality.as_ref().is_some_and(|q| q.score < 50))
+        .count();
+    if poor_prompts > 0 {
+        writeln!(
+            md,
+            "{}. **Prompt Quality**: {} prompt(s) scored below 50/100.",
+            rec_num, poor_prompts
+        )
+        .ok();
+        writeln!(
+            md,
+            "   Include file paths, error messages, and expected behavior in prompts for better AI output.\n"
+        )
+        .ok();
         rec_num += 1;
     }
 

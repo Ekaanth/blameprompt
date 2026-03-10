@@ -86,14 +86,18 @@ pub fn run(keep_notes: bool, purge: bool) -> Result<(), String> {
     println!("{bw}BlamePrompt uninstalled.{r}");
     println!("  {bg}✓{r} Global hooks removed");
     println!("  {bg}✓{r} Git template removed");
-    println!("  {bg}✓{r} Shell PATH entry removed {d}(git is now served from its original location){r}");
+    println!(
+        "  {bg}✓{r} Shell PATH entry removed {d}(git is now served from its original location){r}"
+    );
     if !purge {
         println!(
             "  {bg}✓{r} Git Notes preserved {d}(your receipt history is still in the repo){r}"
         );
     }
     println!();
-    println!("  {d}→ Open a new terminal (or run: source ~/.zshrc) for PATH changes to take effect.{r}");
+    println!(
+        "  {d}→ Open a new terminal (or run: source ~/.zshrc) for PATH changes to take effect.{r}"
+    );
     println!();
     // Warn about other repos that still have stale hook files installed
     println!("  {by}[note]{r} {b}Other git repositories may still have BlamePrompt hook files.{r}");

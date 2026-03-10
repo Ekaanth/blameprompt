@@ -81,21 +81,12 @@ fn fetch_specific_version(version: &str) -> Result<String, String> {
 
 /// Extract "tag_name" value from GitHub API JSON response.
 fn extract_tag_name(json: &str) -> Result<String, String> {
-    // Simple JSON parsing — avoids adding serde dependency just for this.
-    // Looks for: "tag_name": "v0.2.0"
-    for line in json.lines() {
-        let trimmed = line.trim();
-        if trimmed.contains("\"tag_name\"") {
-            if let Some(start) = trimmed.find(": \"") {
-                let rest = &trimmed[start + 3..];
-                if let Some(end) = rest.find('"') {
-                    let tag = &rest[..end];
-                    return Ok(tag.to_string());
-                }
-            }
-        }
-    }
-    Err("Could not parse version from GitHub API response".to_string())
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|_| "Invalid JSON from GitHub API")?;
+    v.get("tag_name")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| "No tag_name in response".to_string())
 }
 
 /// Normalize a version string to a tag (e.g. "0.2.0" -> "v0.2.0", "v0.2.0" -> "v0.2.0").

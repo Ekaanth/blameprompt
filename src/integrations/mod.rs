@@ -1,4 +1,5 @@
 pub mod agent_trace;
+pub mod antigravity;
 pub mod claude_hooks;
 pub mod codex;
 pub mod copilot;

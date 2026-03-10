@@ -207,6 +207,16 @@ enum Commands {
         workspace: Option<String>,
     },
 
+    /// Import Antigravity session transcripts
+    RecordAntigravity {
+        /// Path to a specific session file or directory
+        #[arg(long)]
+        session: Option<String>,
+    },
+
+    /// Install Antigravity .agent/rules and .agent/workflows hooks
+    InstallAntigravity,
+
     /// Manage the local SQLite cache
     Cache {
         #[command(subcommand)]
@@ -568,6 +578,17 @@ fn main() {
 
         Commands::RecordWindsurf { workspace } => {
             integrations::windsurf::run_record_windsurf(workspace.as_deref());
+        }
+
+        Commands::RecordAntigravity { session } => {
+            integrations::antigravity::run_record_antigravity(session.as_deref());
+        }
+
+        Commands::InstallAntigravity => {
+            if let Err(e) = integrations::antigravity::install() {
+                eprintln!("Error installing Antigravity hooks: {}", e);
+                std::process::exit(1);
+            }
         }
 
         Commands::Cache { action } => match action {

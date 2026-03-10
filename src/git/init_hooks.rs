@@ -1,7 +1,7 @@
 use crate::{
     git::hooks,
     git::wrap,
-    integrations::{claude_hooks, codex, copilot, cursor, gemini, windsurf},
+    integrations::{antigravity, claude_hooks, codex, copilot, cursor, gemini, windsurf},
 };
 use std::path::Path;
 
@@ -71,6 +71,9 @@ fn install_all_agent_hooks() -> Vec<&'static str> {
     }
     if windsurf::install_hooks().is_ok() {
         installed.push("Windsurf");
+    }
+    if antigravity::install().is_ok() {
+        installed.push("Antigravity");
     }
 
     installed
@@ -256,60 +259,9 @@ pub fn install_git_template() -> Result<(), String> {
     Ok(())
 }
 
-/// Returns true if `.blameprompt` or `.blameprompt/` is already ignored by any
-/// gitignore source visible from this repo:
-///   1. The repo-local `.gitignore`
-///   2. The global gitignore (`git config core.excludesFile` or `~/.gitignore_global`)
-///   3. The repo's `.git/info/exclude`
-///
-/// Calling this before appending to `.gitignore` prevents duplicate entries when
-/// the user already has the pattern in their global gitignore.
+/// Delegates to staging::is_blameprompt_ignored to avoid duplication.
 fn is_blameprompt_ignored(repo_root: &str) -> bool {
-    let pattern_matches = |content: &str| {
-        content
-            .lines()
-            .any(|l| matches!(l.trim(), ".blameprompt" | ".blameprompt/"))
-    };
-
-    // 1. Local .gitignore
-    let local = Path::new(repo_root).join(".gitignore");
-    if local.exists() {
-        if pattern_matches(&std::fs::read_to_string(&local).unwrap_or_default()) {
-            return true;
-        }
-    }
-
-    // 2. Global gitignore (core.excludesFile, falling back to ~/.gitignore_global)
-    let global_path = std::process::Command::new("git")
-        .args(["config", "--global", "--get", "core.excludesFile"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            dirs::home_dir()
-                .map(|h| h.join(".gitignore_global").to_string_lossy().to_string())
-        });
-
-    if let Some(path) = global_path {
-        let p = Path::new(&path);
-        if p.exists() {
-            if pattern_matches(&std::fs::read_to_string(p).unwrap_or_default()) {
-                return true;
-            }
-        }
-    }
-
-    // 3. .git/info/exclude
-    let exclude = Path::new(repo_root).join(".git").join("info").join("exclude");
-    if exclude.exists() {
-        if pattern_matches(&std::fs::read_to_string(&exclude).unwrap_or_default()) {
-            return true;
-        }
-    }
-
-    false
+    crate::commands::staging::is_blameprompt_ignored(Path::new(repo_root))
 }
 
 pub fn auto_init_blameprompt(repo_root: &str) -> Result<(), String> {

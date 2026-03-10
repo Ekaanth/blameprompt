@@ -187,6 +187,7 @@ mod tests {
             prompt_duration_secs: None,
             accepted_lines: None,
             overridden_lines: None,
+            prompt_quality: None,
         }
     }
 

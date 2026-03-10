@@ -478,6 +478,8 @@ pub fn import_session(path: &Path) -> Option<Receipt> {
         0.0
     };
 
+    let prompt_quality = Some(crate::core::prompt_eval::evaluate(&prompt_summary));
+
     Some(Receipt {
         id: Receipt::new_id(),
         provider: "codex".to_string(),
@@ -522,6 +524,7 @@ pub fn import_session(path: &Path) -> Option<Receipt> {
         prompt_duration_secs: None,
         accepted_lines: None,
         overridden_lines: None,
+        prompt_quality,
     })
 }
 

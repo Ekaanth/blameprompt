@@ -69,15 +69,24 @@ pub fn pull() {
         Ok(o) if o.status.success() => {
             println!("[BlamePrompt] Notes fetched from origin successfully.");
 
-            // Configure auto-fetch for future pulls
-            let _ = Command::new("git")
-                .args([
-                    "config",
-                    "--add",
-                    "remote.origin.fetch",
-                    "+refs/notes/blameprompt:refs/notes/blameprompt",
-                ])
-                .output();
+            // Configure auto-fetch for future pulls if not already set
+            let existing_fetch = Command::new("git")
+                .args(["config", "--get-all", "remote.origin.fetch"])
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .unwrap_or_default();
+
+            if !existing_fetch.contains("refs/notes/blameprompt") {
+                let _ = Command::new("git")
+                    .args([
+                        "config",
+                        "--add",
+                        "remote.origin.fetch",
+                        "+refs/notes/blameprompt:refs/notes/blameprompt",
+                    ])
+                    .output();
+            }
         }
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
