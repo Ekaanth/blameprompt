@@ -21,7 +21,9 @@ pub struct GeminiSession {
     pub model: String,
     pub messages: Vec<GeminiMessage>,
     pub files_modified: Vec<String>,
+    pub tools_used: Vec<String>,
     pub timestamp: DateTime<Utc>,
+    pub end_timestamp: Option<DateTime<Utc>>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
 }
@@ -166,7 +168,9 @@ fn try_parse_single_json(path: &Path, content: &str) -> Option<GeminiSession> {
         model,
         messages,
         files_modified: vec![],
+        tools_used: vec![],
         timestamp: Utc::now(),
+        end_timestamp: None,
         input_tokens: None,
         output_tokens: None,
     })
@@ -184,7 +188,9 @@ pub fn parse_gemini_session(path: &Path) -> Option<GeminiSession> {
     let mut messages = Vec::new();
     let mut model = String::new();
     let mut files_modified = Vec::new();
+    let mut tools_used = Vec::new();
     let mut first_ts: Option<DateTime<Utc>> = None;
+    let mut last_ts: Option<DateTime<Utc>> = None;
     let mut input_tokens: u64 = 0;
     let mut output_tokens: u64 = 0;
 
@@ -199,11 +205,15 @@ pub fn parse_gemini_session(path: &Path) -> Option<GeminiSession> {
             Err(_) => continue,
         };
 
-        if first_ts.is_none() {
-            if let Some(ts_str) = entry.get("timestamp").and_then(|v| v.as_str()) {
-                first_ts = DateTime::parse_from_rfc3339(ts_str)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&Utc));
+        if let Some(ts_str) = entry.get("timestamp").and_then(|v| v.as_str()) {
+            let ts = DateTime::parse_from_rfc3339(ts_str)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc));
+            if first_ts.is_none() {
+                first_ts = ts;
+            }
+            if ts.is_some() {
+                last_ts = ts;
             }
         }
 
@@ -249,8 +259,13 @@ pub fn parse_gemini_session(path: &Path) -> Option<GeminiSession> {
             });
         }
 
-        // Extract file modifications from function calls
+        // Extract file modifications and tool names from function calls
         if let Some(function_call) = entry.get("functionCall").or_else(|| entry.get("tool_call")) {
+            if let Some(name) = function_call.get("name").and_then(|v| v.as_str()) {
+                if !tools_used.contains(&name.to_string()) {
+                    tools_used.push(name.to_string());
+                }
+            }
             if let Some(args) = function_call
                 .get("args")
                 .or_else(|| function_call.get("arguments"))
@@ -271,6 +286,9 @@ pub fn parse_gemini_session(path: &Path) -> Option<GeminiSession> {
         if let Some(tool_calls) = entry.get("toolCalls").and_then(|v| v.as_array()) {
             for tc in tool_calls {
                 if let Some(name) = tc.get("name").and_then(|v| v.as_str()) {
+                    if !tools_used.contains(&name.to_string()) {
+                        tools_used.push(name.to_string());
+                    }
                     if let Some(args) = tc.get("args") {
                         if let Some(fp) = args
                             .get("file_path")
@@ -282,7 +300,6 @@ pub fn parse_gemini_session(path: &Path) -> Option<GeminiSession> {
                             }
                         }
                     }
-                    let _ = name; // tool name tracked for future use
                 }
             }
         }
@@ -324,7 +341,9 @@ pub fn parse_gemini_session(path: &Path) -> Option<GeminiSession> {
         model,
         messages,
         files_modified,
+        tools_used,
         timestamp: first_ts.unwrap_or_else(Utc::now),
+        end_timestamp: last_ts,
         input_tokens: if input_tokens > 0 {
             Some(input_tokens)
         } else {
@@ -385,11 +404,46 @@ pub fn import_session(path: &Path) -> Option<Receipt> {
         })
         .collect();
 
-    let cost = if let (Some(it), Some(ot)) = (session.input_tokens, session.output_tokens) {
-        crate::core::pricing::estimate_cost(&session.model, it, ot)
-    } else {
-        0.0
+    // Compute cost: use actual tokens if available, otherwise estimate
+    let (final_input, final_output) = match (session.input_tokens, session.output_tokens) {
+        (Some(it), Some(ot)) => (it, ot),
+        _ => {
+            let est_in = crate::core::pricing::estimate_tokens_from_chars(
+                session.messages.iter().filter(|m| m.role == "user").map(|m| m.text.len()).sum(),
+            );
+            let est_out = crate::core::pricing::estimate_tokens_from_chars(
+                session.messages.iter().filter(|m| m.role == "assistant").map(|m| m.text.len()).sum(),
+            );
+            (
+                session.input_tokens.unwrap_or(est_in),
+                session.output_tokens.unwrap_or(est_out),
+            )
+        }
     };
+    let cost = crate::core::pricing::estimate_cost(&session.model, final_input, final_output);
+
+    // Session duration
+    let session_duration_secs = session.end_timestamp.map(|end| {
+        let dur = (end - session.timestamp).num_seconds();
+        if dur > 0 { dur as u64 } else { 0 }
+    });
+
+    // Build conversation turns
+    let conversation: Vec<crate::core::receipt::ConversationTurn> = session
+        .messages
+        .iter()
+        .enumerate()
+        .map(|(i, m)| crate::core::receipt::ConversationTurn {
+            turn: (i as u32) + 1,
+            role: m.role.clone(),
+            content: crate::core::redact::redact_secrets_with_config(
+                &m.text.chars().take(cfg.capture.max_prompt_length).collect::<String>(),
+                &cfg,
+            ),
+            tool_name: None,
+            files_touched: None,
+        })
+        .collect();
 
     let prompt_quality = Some(crate::core::prompt_eval::evaluate(&prompt_summary));
 
@@ -403,14 +457,14 @@ pub fn import_session(path: &Path) -> Option<Receipt> {
         prompt_hash,
         message_count: session.messages.len() as u32,
         cost_usd: cost,
-        input_tokens: session.input_tokens,
-        output_tokens: session.output_tokens,
+        input_tokens: Some(final_input),
+        output_tokens: Some(final_output),
         cache_read_tokens: None,
         cache_creation_tokens: None,
         timestamp: session.timestamp,
-        session_start: None,
-        session_end: None,
-        session_duration_secs: None,
+        session_start: Some(session.timestamp),
+        session_end: session.end_timestamp,
+        session_duration_secs,
         ai_response_time_secs: None,
         user,
         file_path: files_changed
@@ -426,13 +480,13 @@ pub fn import_session(path: &Path) -> Option<Receipt> {
         prompt_number: Some(1),
         total_additions: 0,
         total_deletions: 0,
-        tools_used: vec![],
+        tools_used: session.tools_used,
         mcp_servers: vec![],
         agents_spawned: vec![],
         subagent_activities: vec![],
         concurrent_tool_calls: None,
         user_decisions: vec![],
-        conversation: None,
+        conversation: if conversation.is_empty() { None } else { Some(conversation) },
         prompt_submitted_at: Some(session.timestamp),
         prompt_duration_secs: None,
         accepted_lines: None,

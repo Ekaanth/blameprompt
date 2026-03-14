@@ -24,6 +24,7 @@ pub struct CodexSession {
     pub files_modified: Vec<String>,
     pub tools_used: Vec<String>,
     pub timestamp: DateTime<Utc>,
+    pub end_timestamp: Option<DateTime<Utc>>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
 }
@@ -110,6 +111,31 @@ fn collect_session_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
+/// Find a specific session file by session ID (matching rollout-*{session_id}*.jsonl pattern).
+/// Selects the newest matching file by modification time.
+pub fn find_session_by_id(session_id: &str) -> Option<PathBuf> {
+    let dirs = find_sessions_dirs();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for dir in &dirs {
+        let mut all_files = Vec::new();
+        collect_session_files_recursive(dir, &mut all_files);
+        for file in all_files {
+            if let Some(name) = file.file_name().and_then(|n| n.to_str()) {
+                if name.contains(session_id) {
+                    candidates.push(file);
+                }
+            }
+        }
+    }
+    // Return newest match
+    candidates.sort_by_key(|f| {
+        std::fs::metadata(f)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    });
+    candidates.pop()
+}
+
 /// Parse a Codex CLI session transcript file.
 /// Handles multiple JSONL entry types:
 ///   - `turn_context`: model metadata and context
@@ -123,6 +149,7 @@ pub fn parse_codex_session(path: &Path) -> Option<CodexSession> {
     let mut files_modified = Vec::new();
     let mut tools_used = Vec::new();
     let mut first_ts: Option<DateTime<Utc>> = None;
+    let mut last_ts: Option<DateTime<Utc>> = None;
     let mut input_tokens: u64 = 0;
     let mut output_tokens: u64 = 0;
 
@@ -137,12 +164,16 @@ pub fn parse_codex_session(path: &Path) -> Option<CodexSession> {
             Err(_) => continue,
         };
 
-        // Extract timestamp
-        if first_ts.is_none() {
-            if let Some(ts_str) = entry.get("timestamp").and_then(|v| v.as_str()) {
-                first_ts = DateTime::parse_from_rfc3339(ts_str)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&Utc));
+        // Extract timestamps
+        if let Some(ts_str) = entry.get("timestamp").and_then(|v| v.as_str()) {
+            let ts = DateTime::parse_from_rfc3339(ts_str)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc));
+            if first_ts.is_none() {
+                first_ts = ts;
+            }
+            if ts.is_some() {
+                last_ts = ts;
             }
         }
 
@@ -277,6 +308,7 @@ pub fn parse_codex_session(path: &Path) -> Option<CodexSession> {
         files_modified,
         tools_used,
         timestamp: first_ts.unwrap_or_else(Utc::now),
+        end_timestamp: last_ts,
         input_tokens: if input_tokens > 0 {
             Some(input_tokens)
         } else {
@@ -472,11 +504,46 @@ pub fn import_session(path: &Path) -> Option<Receipt> {
         })
         .collect();
 
-    let cost = if let (Some(it), Some(ot)) = (session.input_tokens, session.output_tokens) {
-        crate::core::pricing::estimate_cost(&session.model, it, ot)
-    } else {
-        0.0
+    // Compute cost: use actual tokens if available, otherwise estimate from text
+    let (final_input, final_output) = match (session.input_tokens, session.output_tokens) {
+        (Some(it), Some(ot)) => (it, ot),
+        _ => {
+            let est_in = crate::core::pricing::estimate_tokens_from_chars(
+                session.messages.iter().filter(|m| m.role == "user").map(|m| m.text.len()).sum(),
+            );
+            let est_out = crate::core::pricing::estimate_tokens_from_chars(
+                session.messages.iter().filter(|m| m.role == "assistant").map(|m| m.text.len()).sum(),
+            );
+            (
+                session.input_tokens.unwrap_or(est_in),
+                session.output_tokens.unwrap_or(est_out),
+            )
+        }
     };
+    let cost = crate::core::pricing::estimate_cost(&session.model, final_input, final_output);
+
+    // Compute session duration
+    let session_duration_secs = session.end_timestamp.map(|end| {
+        let dur = (end - session.timestamp).num_seconds();
+        if dur > 0 { dur as u64 } else { 0 }
+    });
+
+    // Build conversation turns
+    let conversation: Vec<crate::core::receipt::ConversationTurn> = session
+        .messages
+        .iter()
+        .enumerate()
+        .map(|(i, m)| crate::core::receipt::ConversationTurn {
+            turn: (i as u32) + 1,
+            role: m.role.clone(),
+            content: crate::core::redact::redact_secrets_with_config(
+                &m.text.chars().take(cfg.capture.max_prompt_length).collect::<String>(),
+                &cfg,
+            ),
+            tool_name: None,
+            files_touched: None,
+        })
+        .collect();
 
     let prompt_quality = Some(crate::core::prompt_eval::evaluate(&prompt_summary));
 
@@ -490,14 +557,14 @@ pub fn import_session(path: &Path) -> Option<Receipt> {
         prompt_hash,
         message_count: session.messages.len() as u32,
         cost_usd: cost,
-        input_tokens: session.input_tokens,
-        output_tokens: session.output_tokens,
+        input_tokens: Some(final_input),
+        output_tokens: Some(final_output),
         cache_read_tokens: None,
         cache_creation_tokens: None,
         timestamp: session.timestamp,
-        session_start: None,
-        session_end: None,
-        session_duration_secs: None,
+        session_start: Some(session.timestamp),
+        session_end: session.end_timestamp,
+        session_duration_secs,
         ai_response_time_secs: None,
         user,
         file_path: files_changed
@@ -519,7 +586,7 @@ pub fn import_session(path: &Path) -> Option<Receipt> {
         subagent_activities: vec![],
         concurrent_tool_calls: None,
         user_decisions: vec![],
-        conversation: None,
+        conversation: if conversation.is_empty() { None } else { Some(conversation) },
         prompt_submitted_at: Some(session.timestamp),
         prompt_duration_secs: None,
         accepted_lines: None,

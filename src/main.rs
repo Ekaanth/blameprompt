@@ -214,9 +214,6 @@ enum Commands {
         session: Option<String>,
     },
 
-    /// Install Antigravity .agent/rules and .agent/workflows hooks
-    InstallAntigravity,
-
     /// Manage the local SQLite cache
     Cache {
         #[command(subcommand)]
@@ -582,13 +579,6 @@ fn main() {
 
         Commands::RecordAntigravity { session } => {
             integrations::antigravity::run_record_antigravity(session.as_deref());
-        }
-
-        Commands::InstallAntigravity => {
-            if let Err(e) = integrations::antigravity::install() {
-                eprintln!("Error installing Antigravity hooks: {}", e);
-                std::process::exit(1);
-            }
         }
 
         Commands::Cache { action } => match action {

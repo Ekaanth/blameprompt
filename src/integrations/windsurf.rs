@@ -147,34 +147,27 @@ pub fn find_workspace_storage_dirs() -> Vec<PathBuf> {
 
 fn windsurf_storage_base() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
-    // macOS
-    let macos = home.join("Library/Application Support/Windsurf/User/workspaceStorage");
-    if macos.exists() {
-        return Some(macos);
-    }
-    // Also check Codeium path
-    let codeium = home.join("Library/Application Support/Codeium/User/workspaceStorage");
-    if codeium.exists() {
-        return Some(codeium);
+    // macOS — check both Windsurf and Codeium (rebrand) paths
+    for app_name in &["Windsurf", "Codeium", "Windsurf - Next Generation"] {
+        let macos = home.join(format!("Library/Application Support/{}/User/workspaceStorage", app_name));
+        if macos.exists() {
+            return Some(macos);
+        }
     }
     // Linux
-    let linux = home.join(".config/Windsurf/User/workspaceStorage");
-    if linux.exists() {
-        return Some(linux);
-    }
-    let linux_codeium = home.join(".config/Codeium/User/workspaceStorage");
-    if linux_codeium.exists() {
-        return Some(linux_codeium);
+    for app_name in &["Windsurf", "Codeium", "windsurf"] {
+        let linux = home.join(format!(".config/{}/User/workspaceStorage", app_name));
+        if linux.exists() {
+            return Some(linux);
+        }
     }
     // Windows
     if let Ok(appdata) = std::env::var("APPDATA") {
-        let win = PathBuf::from(&appdata).join("Windsurf/User/workspaceStorage");
-        if win.exists() {
-            return Some(win);
-        }
-        let win_codeium = PathBuf::from(appdata).join("Codeium/User/workspaceStorage");
-        if win_codeium.exists() {
-            return Some(win_codeium);
+        for app_name in &["Windsurf", "Codeium"] {
+            let win = PathBuf::from(&appdata).join(format!("{}/User/workspaceStorage", app_name));
+            if win.exists() {
+                return Some(win);
+            }
         }
     }
     None
@@ -182,7 +175,10 @@ fn windsurf_storage_base() -> Option<PathBuf> {
 
 /// Read all Windsurf chat sessions from a workspace state.vscdb.
 pub fn read_chat_sessions(db_path: &Path) -> Vec<WindsurfChatSession> {
-    let conn = match Connection::open(db_path) {
+    let conn = match Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[windsurf] Cannot open {}: {}", db_path.display(), e);
@@ -468,29 +464,70 @@ pub fn run_record_windsurf(workspace: Option<&str>) {
 
         let prompt_quality = Some(crate::core::prompt_eval::evaluate(&prompt_summary));
 
+        let response_summary = session
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "assistant")
+            .map(|m| m.text.chars().take(500).collect());
+
+        // Build conversation turns
+        let conversation: Vec<crate::core::receipt::ConversationTurn> = session
+            .messages
+            .iter()
+            .enumerate()
+            .map(|(i, m)| crate::core::receipt::ConversationTurn {
+                turn: (i as u32) + 1,
+                role: m.role.clone(),
+                content: crate::core::redact::redact_secrets_with_config(
+                    &m.text.chars().take(cfg.capture.max_prompt_length).collect::<String>(),
+                    &cfg,
+                ),
+                tool_name: None,
+                files_touched: None,
+            })
+            .collect();
+
+        // Estimate tokens and cost
+        let estimated_input = crate::core::pricing::estimate_tokens_from_chars(
+            session.messages.iter().filter(|m| m.role == "user").map(|m| m.text.len()).sum(),
+        );
+        let estimated_output = crate::core::pricing::estimate_tokens_from_chars(
+            session.messages.iter().filter(|m| m.role == "assistant").map(|m| m.text.len()).sum(),
+        );
+        let cost = crate::core::pricing::estimate_cost(&session.model, estimated_input, estimated_output);
+
+        // Compute session duration from message timestamps
+        let session_duration_secs = {
+            let first_ts = session.messages.first().and_then(|m| m.timestamp);
+            let last_ts = session.messages.last().and_then(|m| m.timestamp);
+            match (first_ts, last_ts) {
+                (Some(f), Some(l)) => {
+                    let dur = (l - f).num_seconds();
+                    if dur > 0 { Some(dur as u64) } else { None }
+                }
+                _ => None,
+            }
+        };
+
         let receipt = Receipt {
             id: Receipt::new_id(),
             provider: "windsurf".to_string(),
             model: session.model.clone(),
             session_id: session.session_id.clone(),
             prompt_summary,
-            response_summary: session
-                .messages
-                .iter()
-                .rev()
-                .find(|m| m.role == "assistant")
-                .map(|m| m.text.chars().take(500).collect()),
+            response_summary,
             prompt_hash,
             message_count: session.messages.len() as u32,
-            cost_usd: 0.0,
-            input_tokens: None,
-            output_tokens: None,
+            cost_usd: cost,
+            input_tokens: Some(estimated_input),
+            output_tokens: Some(estimated_output),
             cache_read_tokens: None,
             cache_creation_tokens: None,
             timestamp: session.timestamp,
-            session_start: None,
-            session_end: None,
-            session_duration_secs: None,
+            session_start: session.messages.first().and_then(|m| m.timestamp),
+            session_end: session.messages.last().and_then(|m| m.timestamp),
+            session_duration_secs,
             ai_response_time_secs: None,
             user: user.clone(),
             file_path: files_changed
@@ -512,7 +549,7 @@ pub fn run_record_windsurf(workspace: Option<&str>) {
             subagent_activities: vec![],
             concurrent_tool_calls: None,
             user_decisions: vec![],
-            conversation: None,
+            conversation: if conversation.is_empty() { None } else { Some(conversation) },
             prompt_submitted_at: Some(session.timestamp),
             prompt_duration_secs: None,
             accepted_lines: None,
@@ -569,19 +606,24 @@ fn get_recent_changed_files() -> Vec<String> {
 }
 
 /// Install BlamePrompt hooks for Windsurf (Codeium).
-/// Writes to ~/.windsurf/hooks.json or ~/.codeium/hooks.json.
+/// Writes to ~/.codeium/windsurf/hooks.json (primary) or ~/.windsurf/hooks.json (legacy).
 pub fn install_hooks() -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Cannot find home directory")?;
 
-    // Try Windsurf first, then Codeium
-    let target_dir = if home.join(".windsurf").exists() {
+    // Primary: ~/.codeium/windsurf/ (new Codeium/Windsurf path)
+    // Fallback: ~/.windsurf/ or ~/.codeium/ (legacy)
+    let target_dir = if home.join(".codeium").join("windsurf").exists() {
+        home.join(".codeium").join("windsurf")
+    } else if home.join(".windsurf").exists() {
         home.join(".windsurf")
     } else if home.join(".codeium").exists() {
         home.join(".codeium")
     } else {
-        return Err(
-            "Windsurf/Codeium not found (~/.windsurf/ or ~/.codeium/ does not exist)".to_string(),
-        );
+        // Create the preferred path
+        let preferred = home.join(".codeium").join("windsurf");
+        std::fs::create_dir_all(&preferred)
+            .map_err(|e| format!("Cannot create {}: {}", preferred.display(), e))?;
+        preferred
     };
 
     let hook_path = target_dir.join("hooks.json");
@@ -604,15 +646,26 @@ pub fn install_hooks() -> Result<(), String> {
 
     let command = format!("{} checkpoint windsurf --hook-input stdin", binary);
 
+    // Hook events matching Windsurf/Cascade's actual event system:
+    // - pre_write_code: human checkpoint (before AI edits)
+    // - post_write_code: AI checkpoint (after AI edits)
+    // - post_cascade_response_with_transcript: captures full transcript
     let hook_config = serde_json::json!({
         "hooks": {
-            "afterFileEdit": [{
-                "command": command,
+            "pre_write_code": [{
+                "command": command.clone(),
+                "show_output": false,
+                "description": "BlamePrompt: checkpoint before AI edits"
+            }],
+            "post_write_code": [{
+                "command": command.clone(),
+                "show_output": false,
                 "description": "BlamePrompt: record AI file edits"
             }],
-            "afterCascadeResponse": [{
+            "post_cascade_response_with_transcript": [{
                 "command": format!("{} checkpoint windsurf --hook-input stdin", binary),
-                "description": "BlamePrompt: capture Cascade responses"
+                "show_output": false,
+                "description": "BlamePrompt: capture Cascade response with transcript"
             }]
         }
     });

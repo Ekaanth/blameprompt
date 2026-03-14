@@ -153,11 +153,38 @@ fn cursor_storage_base() -> Option<PathBuf> {
     None
 }
 
+/// Locate the Cursor globalStorage state.vscdb (contains all conversations globally).
+/// This is the preferred source as it has all conversations across workspaces.
+fn cursor_global_storage_db() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    // macOS
+    let macos = home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb");
+    if macos.exists() {
+        return Some(macos);
+    }
+    // Linux
+    let linux = home.join(".config/Cursor/User/globalStorage/state.vscdb");
+    if linux.exists() {
+        return Some(linux);
+    }
+    // Windows
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let win = PathBuf::from(appdata).join("Cursor/User/globalStorage/state.vscdb");
+        if win.exists() {
+            return Some(win);
+        }
+    }
+    None
+}
+
 /// Read all Cursor chat sessions from a workspace state.vscdb.
 /// Tries both the `cursorDiskKV` table (newer Cursor versions with composerData keys)
 /// and the `ItemTable` (older versions with chatData keys).
 pub fn read_chat_sessions(db_path: &Path) -> Vec<CursorChatSession> {
-    let conn = match Connection::open(db_path) {
+    let conn = match Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[cursor] Cannot open {}: {}", db_path.display(), e);
@@ -174,6 +201,16 @@ pub fn read_chat_sessions(db_path: &Path) -> Vec<CursorChatSession> {
     sessions.extend(read_from_item_table(&conn));
 
     sessions
+}
+
+/// Read sessions from the globalStorage state.vscdb (all conversations across workspaces).
+/// This uses composerData keys and also bubble content for individual messages.
+pub fn read_sessions_from_global_storage() -> Vec<CursorChatSession> {
+    let db_path = match cursor_global_storage_db() {
+        Some(p) => p,
+        None => return vec![],
+    };
+    read_chat_sessions(&db_path)
 }
 
 /// Read sessions from the cursorDiskKV table (newer Cursor versions).
@@ -373,7 +410,12 @@ pub fn find_db_for_current_workspace() -> Option<PathBuf> {
         }
     }
 
-    // Fallback: most recently modified
+    // Fallback: try globalStorage (contains all conversations across workspaces)
+    if let Some(global_db) = cursor_global_storage_db() {
+        return Some(global_db);
+    }
+
+    // Last resort: most recently modified workspace storage
     all.into_iter().next().map(|d| d.join("state.vscdb"))
 }
 
@@ -403,7 +445,13 @@ pub fn run_record_cursor(workspace: Option<&str>) {
         std::process::exit(1);
     }
 
-    let sessions = read_chat_sessions(&db_path);
+    let mut sessions = read_chat_sessions(&db_path);
+
+    // Also try globalStorage for additional sessions not in workspace storage
+    if sessions.is_empty() {
+        sessions = read_sessions_from_global_storage();
+    }
+
     if sessions.is_empty() {
         eprintln!(
             "[cursor] No AI chat sessions found in {}",
@@ -457,24 +505,70 @@ pub fn run_record_cursor(workspace: Option<&str>) {
 
         let prompt_quality = Some(crate::core::prompt_eval::evaluate(&prompt_summary));
 
+        let response_summary = session
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "assistant")
+            .map(|m| m.text.chars().take(500).collect());
+
+        // Build conversation turns for full context tracking
+        let conversation: Vec<crate::core::receipt::ConversationTurn> = session
+            .messages
+            .iter()
+            .enumerate()
+            .map(|(i, m)| crate::core::receipt::ConversationTurn {
+                turn: (i as u32) + 1,
+                role: m.role.clone(),
+                content: crate::core::redact::redact_secrets_with_config(
+                    &m.text.chars().take(cfg.capture.max_prompt_length).collect::<String>(),
+                    &cfg,
+                ),
+                tool_name: None,
+                files_touched: None,
+            })
+            .collect();
+
+        // Estimate tokens from message content
+        let estimated_input = crate::core::pricing::estimate_tokens_from_chars(
+            session.messages.iter().filter(|m| m.role == "user").map(|m| m.text.len()).sum(),
+        );
+        let estimated_output = crate::core::pricing::estimate_tokens_from_chars(
+            session.messages.iter().filter(|m| m.role == "assistant").map(|m| m.text.len()).sum(),
+        );
+        let cost = crate::core::pricing::estimate_cost(&session.model, estimated_input, estimated_output);
+
+        // Compute session duration from message timestamps
+        let session_duration_secs = {
+            let first_ts = session.messages.first().and_then(|m| m.timestamp);
+            let last_ts = session.messages.last().and_then(|m| m.timestamp);
+            match (first_ts, last_ts) {
+                (Some(f), Some(l)) => {
+                    let dur = (l - f).num_seconds();
+                    if dur > 0 { Some(dur as u64) } else { None }
+                }
+                _ => None,
+            }
+        };
+
         let receipt = Receipt {
             id: Receipt::new_id(),
             provider: "cursor".to_string(),
             model: session.model.clone(),
             session_id: session.session_id.clone(),
             prompt_summary,
-            response_summary: None,
+            response_summary,
             prompt_hash,
             message_count: session.messages.len() as u32,
-            cost_usd: 0.0, // Cursor doesn't expose cost
-            input_tokens: None,
-            output_tokens: None,
+            cost_usd: cost,
+            input_tokens: Some(estimated_input),
+            output_tokens: Some(estimated_output),
             cache_read_tokens: None,
             cache_creation_tokens: None,
             timestamp: session.timestamp,
-            session_start: None,
-            session_end: None,
-            session_duration_secs: None,
+            session_start: session.messages.first().and_then(|m| m.timestamp),
+            session_end: session.messages.last().and_then(|m| m.timestamp),
+            session_duration_secs,
             ai_response_time_secs: None,
             user: user.clone(),
             file_path: files_changed
@@ -496,7 +590,7 @@ pub fn run_record_cursor(workspace: Option<&str>) {
             subagent_activities: vec![],
             concurrent_tool_calls: None,
             user_decisions: vec![],
-            conversation: None,
+            conversation: if conversation.is_empty() { None } else { Some(conversation) },
             prompt_submitted_at: Some(session.timestamp),
             prompt_duration_secs: None,
             accepted_lines: None,
@@ -586,13 +680,17 @@ pub fn install_hooks() -> Result<(), String> {
 
     let hook_config = serde_json::json!({
         "hooks": {
+            "beforeSubmitPrompt": [{
+                "command": format!("{} checkpoint cursor --hook-input stdin", binary),
+                "description": "BlamePrompt: capture prompt submission"
+            }],
             "afterFileEdit": [{
                 "command": command,
                 "description": "BlamePrompt: record AI file edits"
             }],
-            "beforeSubmitPrompt": [{
+            "afterResponse": [{
                 "command": format!("{} checkpoint cursor --hook-input stdin", binary),
-                "description": "BlamePrompt: capture prompt submission"
+                "description": "BlamePrompt: capture AI response with transcript"
             }]
         }
     });

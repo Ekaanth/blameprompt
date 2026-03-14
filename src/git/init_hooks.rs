@@ -72,10 +72,9 @@ fn install_all_agent_hooks() -> Vec<&'static str> {
     if windsurf::install_hooks().is_ok() {
         installed.push("Windsurf");
     }
-    if antigravity::install().is_ok() {
+    if antigravity::install_hooks().is_ok() {
         installed.push("Antigravity");
     }
-
     installed
 }
 

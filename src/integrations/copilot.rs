@@ -178,7 +178,10 @@ fn vscode_storage_base() -> Option<PathBuf> {
 
 /// Read all Copilot chat sessions from a workspace state.vscdb.
 pub fn read_chat_sessions(db_path: &Path) -> Vec<CopilotChatSession> {
-    let conn = match Connection::open(db_path) {
+    let conn = match Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[copilot] Cannot open {}: {}", db_path.display(), e);
@@ -199,12 +202,15 @@ pub fn read_chat_sessions(db_path: &Path) -> Vec<CopilotChatSession> {
         return vec![];
     }
 
-    // Known Copilot Chat storage keys
+    // Known Copilot Chat storage keys (covers multiple Copilot Chat versions)
     let known_key_patterns = &[
         "github.copilot-chat.chatData",
         "github.copilot.chat.chatData",
         "copilot-chat.chatData",
         "interactiveSession.chatData",
+        "github.copilot-chat.history",
+        "github.copilot.chat.history",
+        "copilot.chatSessions",
     ];
 
     let mut sessions: Vec<CopilotChatSession> = Vec::new();
@@ -475,29 +481,70 @@ pub fn run_record_copilot(workspace: Option<&str>) {
 
         let prompt_quality = Some(crate::core::prompt_eval::evaluate(&prompt_summary));
 
+        let response_summary = session
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "assistant")
+            .map(|m| m.text.chars().take(500).collect());
+
+        // Build conversation turns
+        let conversation: Vec<crate::core::receipt::ConversationTurn> = session
+            .messages
+            .iter()
+            .enumerate()
+            .map(|(i, m)| crate::core::receipt::ConversationTurn {
+                turn: (i as u32) + 1,
+                role: m.role.clone(),
+                content: crate::core::redact::redact_secrets_with_config(
+                    &m.text.chars().take(cfg.capture.max_prompt_length).collect::<String>(),
+                    &cfg,
+                ),
+                tool_name: None,
+                files_touched: None,
+            })
+            .collect();
+
+        // Estimate tokens from message content for cost calculation
+        let estimated_input = crate::core::pricing::estimate_tokens_from_chars(
+            session.messages.iter().filter(|m| m.role == "user").map(|m| m.text.len()).sum(),
+        );
+        let estimated_output = crate::core::pricing::estimate_tokens_from_chars(
+            session.messages.iter().filter(|m| m.role == "assistant").map(|m| m.text.len()).sum(),
+        );
+        let cost = crate::core::pricing::estimate_cost(&session.model, estimated_input, estimated_output);
+
+        // Compute session duration from message timestamps
+        let session_duration_secs = {
+            let first_ts = session.messages.first().and_then(|m| m.timestamp);
+            let last_ts = session.messages.last().and_then(|m| m.timestamp);
+            match (first_ts, last_ts) {
+                (Some(f), Some(l)) => {
+                    let dur = (l - f).num_seconds();
+                    if dur > 0 { Some(dur as u64) } else { None }
+                }
+                _ => None,
+            }
+        };
+
         let receipt = Receipt {
             id: Receipt::new_id(),
             provider: "copilot".to_string(),
             model: session.model.clone(),
             session_id: session.session_id.clone(),
             prompt_summary,
-            response_summary: session
-                .messages
-                .iter()
-                .rev()
-                .find(|m| m.role == "assistant")
-                .map(|m| m.text.chars().take(500).collect()),
+            response_summary,
             prompt_hash,
             message_count: session.messages.len() as u32,
-            cost_usd: 0.0,
-            input_tokens: None,
-            output_tokens: None,
+            cost_usd: cost,
+            input_tokens: Some(estimated_input),
+            output_tokens: Some(estimated_output),
             cache_read_tokens: None,
             cache_creation_tokens: None,
             timestamp: session.timestamp,
-            session_start: None,
-            session_end: None,
-            session_duration_secs: None,
+            session_start: session.messages.first().and_then(|m| m.timestamp),
+            session_end: session.messages.last().and_then(|m| m.timestamp),
+            session_duration_secs,
             ai_response_time_secs: None,
             user: user.clone(),
             file_path: files_changed
@@ -519,7 +566,7 @@ pub fn run_record_copilot(workspace: Option<&str>) {
             subagent_activities: vec![],
             concurrent_tool_calls: None,
             user_decisions: vec![],
-            conversation: None,
+            conversation: if conversation.is_empty() { None } else { Some(conversation) },
             prompt_submitted_at: Some(session.timestamp),
             prompt_duration_secs: None,
             accepted_lines: None,
@@ -572,10 +619,10 @@ pub fn install_hooks() -> Result<(), String> {
         "hooks": {
             "PreToolUse": [{
                 "matcher": "Write|Edit|MultiEdit",
-                "hooks": [{"type": "command", "command": command}]
+                "hooks": [{"type": "command", "command": command.clone()}]
             }],
             "PostToolUse": [{
-                "matcher": "Write|Edit|MultiEdit|Bash",
+                "matcher": "Write|Edit|MultiEdit|Bash|CreateFile|RenameFile|DeleteFile",
                 "hooks": [{"type": "command", "command": command}]
             }]
         }

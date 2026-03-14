@@ -132,51 +132,88 @@ pub fn import_session(path: &Path) -> Option<Receipt> {
     })
 }
 
-/// Install proper hooks for Antigravity IDE.
-/// This creates .agent/rules/blameprompt.md and .agent/workflows/checkpoint.md
-pub fn install() -> Result<(), String> {
-    let agent_dir = Path::new(".agent");
-    let rules_dir = agent_dir.join("rules");
-    let workflows_dir = agent_dir.join("workflows");
+/// Install hooks for Antigravity IDE in ~/.antigravity/settings.json.
+/// Follows the same pattern as Gemini (settings.json with hook events).
+/// No project-level files are created — everything lives in the user's home directory.
+pub fn install_hooks() -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    let ag_dir = home.join(".antigravity");
 
-    std::fs::create_dir_all(&rules_dir)
-        .map_err(|e| format!("Failed to create .agent/rules: {}", e))?;
-    std::fs::create_dir_all(&workflows_dir)
-        .map_err(|e| format!("Failed to create .agent/workflows: {}", e))?;
+    if !ag_dir.exists() {
+        return Err("Antigravity IDE not found (~/.antigravity/ does not exist)".to_string());
+    }
 
+    let settings_path = ag_dir.join("settings.json");
     let binary = std::env::current_exe()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "blameprompt".to_string());
 
-    // 1. Install Rule
-    let rule_content = format!(
-        "# BlamePrompt Integration\n\n\
-        To ensure code provenance and cost tracking, you MUST follow these rules:\n\n\
-        1. After every tool call that modifies a file (e.g., `write_to_file`, `replace_file_content`, `run_command` that edits code), you MUST call the `checkpoint` workflow.\n\
-        2. Before you finish a task (before calling `notify_user` or finishing a mission), you MUST call `blameprompt checkpoint antigravity` to finalize the session recording.\n\n\
-        Use the following command for manual checkpoints:\n\
-        ```bash\n\
-        {} checkpoint antigravity\n\
-        ```\n",
-        binary
-    );
-    std::fs::write(rules_dir.join("blameprompt.md"), rule_content)
-        .map_err(|e| format!("Failed to write blameprompt.md rule: {}", e))?;
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        let content = std::fs::read_to_string(&settings_path)
+            .map_err(|e| format!("Cannot read {}: {}", settings_path.display(), e))?;
+        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
 
-    // 2. Install Workflow
-    let workflow_content = format!(
-        "---\n\
-        description: Record a work checkpoint with BlamePrompt\n\
-        ---\n\n\
-        1. Run the BlamePrompt checkpoint command to record the current state and cost.\n\n\
-        // turbo\n\
-        2. run_command: \"{} checkpoint antigravity\"\n",
-        binary
-    );
-    std::fs::write(workflows_dir.join("checkpoint.md"), workflow_content)
-        .map_err(|e| format!("Failed to write checkpoint.md workflow: {}", e))?;
+    // Check if already installed
+    let settings_str = serde_json::to_string(&settings).unwrap_or_default();
+    if settings_str.contains("blameprompt") {
+        println!(
+            "  BlamePrompt hooks already installed in {}",
+            settings_path.display()
+        );
+        return Ok(());
+    }
 
-    println!("Installed Antigravity hooks in .agent/");
+    let command = format!("{} checkpoint antigravity --hook-input stdin", binary);
+
+    // Enable tool hooks
+    if settings.get("tools").is_none() {
+        settings["tools"] = serde_json::json!({});
+    }
+    settings["tools"]["enableHooks"] = serde_json::json!(true);
+
+    // Add hooks
+    if settings.get("hooks").is_none() {
+        settings["hooks"] = serde_json::json!({});
+    }
+    let hooks = settings.get_mut("hooks").unwrap();
+
+    let hook_cmd = serde_json::json!([{
+        "type": "command",
+        "command": command
+    }]);
+
+    for event in &[
+        "BeforeTool",
+        "AfterTool",
+        "UserPromptSubmit",
+        "Stop",
+        "SubagentStart",
+        "SubagentStop",
+    ] {
+        let entry = serde_json::json!({
+            "matcher": if event.contains("Tool") { "write_file|replace" } else { "*" },
+            "hooks": hook_cmd
+        });
+        if hooks.get(*event).is_none() {
+            hooks[*event] = serde_json::json!([]);
+        }
+        if let Some(arr) = hooks.get_mut(*event).and_then(|v| v.as_array_mut()) {
+            arr.push(entry);
+        }
+    }
+
+    let json_str = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("Failed to serialize: {}", e))?;
+    std::fs::write(&settings_path, json_str)
+        .map_err(|e| format!("Cannot write {}: {}", settings_path.display(), e))?;
+
+    println!(
+        "  Installed BlamePrompt hooks in {}",
+        settings_path.display()
+    );
     Ok(())
 }
 
