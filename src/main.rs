@@ -118,6 +118,14 @@ enum Commands {
         export: Option<String>,
     },
 
+    /// Alias for analytics
+    #[command(name = "stats", about = "Show aggregated AI usage statistics (alias for analytics)")]
+    Stats {
+        /// Export format: json, csv
+        #[arg(long)]
+        export: Option<String>,
+    },
+
     /// Generate comprehensive markdown report
     Report {
         /// Output file path
@@ -214,6 +222,48 @@ enum Commands {
         session: Option<String>,
     },
 
+    /// Import Continue AI coding assistant session transcripts
+    RecordContinue {
+        /// Path to a specific session file or directory
+        #[arg(long)]
+        session: Option<String>,
+    },
+
+    /// Import Droid CLI AI coding agent session transcripts
+    RecordDroid {
+        /// Path to a specific session file or directory
+        #[arg(long)]
+        session: Option<String>,
+    },
+
+    /// Import JetBrains Junie AI coding assistant session transcripts
+    RecordJunie {
+        /// Path to a specific session file or directory
+        #[arg(long)]
+        session: Option<String>,
+    },
+
+    /// Import Atlassian Rovo Dev AI coding agent session transcripts
+    RecordRovoDev {
+        /// Path to a specific session file or directory
+        #[arg(long)]
+        session: Option<String>,
+    },
+
+    /// Import Sourcegraph Amp AI coding agent session transcripts
+    RecordAmp {
+        /// Path to a specific session file or directory
+        #[arg(long)]
+        session: Option<String>,
+    },
+
+    /// Import OpenCode terminal AI coding tool session transcripts
+    RecordOpenCode {
+        /// Path to a specific session file or directory
+        #[arg(long)]
+        session: Option<String>,
+    },
+
     /// Manage the local SQLite cache
     Cache {
         #[command(subcommand)]
@@ -259,7 +309,14 @@ enum Commands {
     StagingCount,
 
     /// Attach staged receipts to HEAD as git notes and clear staging (used by git hooks, internal)
-    Attach,
+    Attach {
+        /// Amend the commit message to append [AI: XX%] annotation
+        #[arg(long)]
+        annotate: bool,
+    },
+
+    /// Run diagnostic checks on your BlamePrompt installation
+    Doctor,
 
     /// Export blameprompt notes for a commit to Agent Trace v0.1.0 format
     ExportAgentTrace {
@@ -425,6 +482,87 @@ fn compute_acceptance_stats(receipts: &mut [core::receipt::Receipt]) {
     }
 }
 
+/// Calculate the percentage of AI-generated lines from the attached receipts.
+/// Uses total_additions from receipts vs total additions in the commit diff.
+fn compute_ai_percentage(receipts: &[core::receipt::Receipt]) -> f64 {
+    // Sum AI additions from all receipts
+    let ai_additions: u32 = receipts.iter().map(|r| r.effective_total_additions()).sum();
+
+    // Get total additions in the commit from git diff
+    let total_commit_additions = std::process::Command::new("git")
+        .args(["diff", "--numstat", "HEAD~1..HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|output| {
+            output
+                .lines()
+                .filter_map(|line| {
+                    let parts: Vec<&str> = line.split('\t').collect();
+                    if parts.len() >= 1 {
+                        parts[0].parse::<u32>().ok()
+                    } else {
+                        None
+                    }
+                })
+                .sum::<u32>()
+        })
+        .unwrap_or(0);
+
+    if total_commit_additions == 0 {
+        if ai_additions > 0 {
+            100.0
+        } else {
+            0.0
+        }
+    } else {
+        let pct = (ai_additions as f64 / total_commit_additions as f64) * 100.0;
+        // Cap at 100%
+        if pct > 100.0 { 100.0 } else { pct }
+    }
+}
+
+/// Amend the HEAD commit message to append [AI: XX%].
+fn amend_commit_with_annotation(ai_pct: f64) {
+    // Read current commit message
+    let current_msg = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim_end().to_string());
+
+    let msg = match current_msg {
+        Some(m) => m,
+        None => {
+            eprintln!("[BlamePrompt] Warning: could not read commit message for annotation");
+            return;
+        }
+    };
+
+    // Don't double-annotate
+    if msg.contains("[AI:") {
+        return;
+    }
+
+    let annotated = format!("{} [AI: {:.0}%]", msg, ai_pct);
+
+    let status = std::process::Command::new("git")
+        .args(["commit", "--amend", "-m", &annotated])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            eprintln!("[BlamePrompt] Commit annotated with [AI: {:.0}%]", ai_pct);
+        }
+        _ => {
+            eprintln!("[BlamePrompt] Warning: failed to amend commit with AI annotation");
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -517,7 +655,7 @@ fn main() {
             );
         }
 
-        Commands::Analytics { export } => {
+        Commands::Analytics { export } | Commands::Stats { export } => {
             commands::analytics::run(export.as_deref());
         }
 
@@ -609,6 +747,30 @@ fn main() {
 
         Commands::RecordAntigravity { session } => {
             integrations::antigravity::run_record_antigravity(session.as_deref());
+        }
+
+        Commands::RecordContinue { session } => {
+            integrations::continue_ai::run_record_continue(session.as_deref());
+        }
+
+        Commands::RecordDroid { session } => {
+            integrations::droid::run_record_droid(session.as_deref());
+        }
+
+        Commands::RecordJunie { session } => {
+            integrations::junie::run_record_junie(session.as_deref());
+        }
+
+        Commands::RecordRovoDev { session } => {
+            integrations::rovo_dev::run_record_rovo_dev(session.as_deref());
+        }
+
+        Commands::RecordAmp { session } => {
+            integrations::amp::run_record_amp(session.as_deref());
+        }
+
+        Commands::RecordOpenCode { session } => {
+            integrations::opencode::run_record_opencode(session.as_deref());
         }
 
         Commands::Cache { action } => match action {
@@ -706,7 +868,7 @@ fn main() {
             commands::profile::run(edit);
         }
 
-        Commands::Attach => {
+        Commands::Attach { annotate } => {
             let mut data = commands::staging::read_staging();
             if data.receipts.is_empty() {
                 return;
@@ -731,11 +893,21 @@ fn main() {
                         data.receipts.len(),
                         head_short
                     );
+
+                    // If --annotate, amend the commit message with [AI: XX%]
+                    if annotate {
+                        let ai_pct = compute_ai_percentage(&data.receipts);
+                        amend_commit_with_annotation(ai_pct);
+                    }
                 }
                 Err(e) => {
                     eprintln!("[BlamePrompt] Failed to attach receipts: {}", e);
                 }
             }
+        }
+
+        Commands::Doctor => {
+            commands::doctor::run();
         }
     }
 }

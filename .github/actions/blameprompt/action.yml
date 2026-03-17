@@ -1,0 +1,217 @@
+name: 'BlamePrompt Security Scan'
+description: 'Run BlamePrompt security scans (vuln-scan, prompt-injection, supply-chain-risk) and post results as a PR comment'
+branding:
+  icon: 'shield'
+  color: 'orange'
+
+inputs:
+  github-token:
+    description: 'GitHub token for posting PR comments'
+    required: true
+    default: ${{ github.token }}
+  version:
+    description: 'BlamePrompt version to install (e.g., "latest", "0.6.0")'
+    required: false
+    default: 'latest'
+  vuln-scan:
+    description: 'Run vulnerability pattern scan'
+    required: false
+    default: 'true'
+  prompt-injection-scan:
+    description: 'Run prompt injection pattern scan'
+    required: false
+    default: 'true'
+  supply-chain-risk:
+    description: 'Run supply chain risk assessment'
+    required: false
+    default: 'true'
+  fail-on-critical:
+    description: 'Fail the action if critical vulnerabilities are found'
+    required: false
+    default: 'false'
+  risk-threshold:
+    description: 'Fail if overall risk score exceeds this value (0.0-10.0). Set to 0 to disable.'
+    required: false
+    default: '0'
+  post-comment:
+    description: 'Post results as a PR comment'
+    required: false
+    default: 'true'
+  scan-paths:
+    description: 'Paths to scan (space-separated). Defaults to entire repository.'
+    required: false
+    default: '.'
+
+outputs:
+  vuln-count:
+    description: 'Number of vulnerabilities found'
+    value: ${{ steps.scan.outputs.vuln-count }}
+  injection-count:
+    description: 'Number of prompt injection patterns found'
+    value: ${{ steps.scan.outputs.injection-count }}
+  risk-score:
+    description: 'Overall supply chain risk score (0.0-10.0)'
+    value: ${{ steps.scan.outputs.risk-score }}
+  has-critical:
+    description: 'Whether critical issues were found (true/false)'
+    value: ${{ steps.scan.outputs.has-critical }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install BlamePrompt
+      shell: bash
+      run: |
+        if command -v blameprompt &> /dev/null; then
+          echo "BlamePrompt already installed: $(blameprompt --version)"
+        else
+          echo "Installing BlamePrompt..."
+          if [ "${{ inputs.version }}" = "latest" ]; then
+            curl -fsSL https://raw.githubusercontent.com/pchaganti/blameprompt/main/install.sh | bash
+          else
+            curl -fsSL https://raw.githubusercontent.com/pchaganti/blameprompt/main/install.sh | bash -s -- --version ${{ inputs.version }}
+          fi
+        fi
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: Initialize BlamePrompt
+      shell: bash
+      run: |
+        cd ${{ github.workspace }}
+        blameprompt init --ci 2>/dev/null || true
+
+    - name: Fetch Git Notes
+      shell: bash
+      run: |
+        cd ${{ github.workspace }}
+        git fetch origin refs/notes/blameprompt:refs/notes/blameprompt 2>/dev/null || echo "No blameprompt notes found (this is OK for first run)"
+
+    - name: Run Security Scans
+      id: scan
+      shell: bash
+      run: |
+        cd ${{ github.workspace }}
+        SCAN_PATHS="${{ inputs.scan-paths }}"
+        VULN_COUNT=0
+        INJECTION_COUNT=0
+        RISK_SCORE="0.0"
+        HAS_CRITICAL=false
+        REPORT=""
+
+        # Vulnerability scan
+        if [ "${{ inputs.vuln-scan }}" = "true" ]; then
+          echo "Running vulnerability scan..."
+          VULN_OUTPUT=$(blameprompt vuln-scan $SCAN_PATHS 2>&1) || true
+          VULN_COUNT=$(echo "$VULN_OUTPUT" | grep -c "CRITICAL\|HIGH\|MEDIUM\|LOW" || echo "0")
+          if echo "$VULN_OUTPUT" | grep -q "CRITICAL"; then
+            HAS_CRITICAL=true
+          fi
+          REPORT="${REPORT}
+
+        ## Vulnerability Scan
+
+        ${VULN_OUTPUT}"
+          echo "Vulnerability scan complete: ${VULN_COUNT} findings"
+        fi
+
+        # Prompt injection scan
+        if [ "${{ inputs.prompt-injection-scan }}" = "true" ]; then
+          echo "Running prompt injection scan..."
+          INJECTION_OUTPUT=$(blameprompt prompt-injection $SCAN_PATHS 2>&1) || true
+          INJECTION_COUNT=$(echo "$INJECTION_OUTPUT" | grep -c "CRITICAL\|HIGH\|MEDIUM\|LOW" || echo "0")
+          if echo "$INJECTION_OUTPUT" | grep -q "CRITICAL"; then
+            HAS_CRITICAL=true
+          fi
+          REPORT="${REPORT}
+
+        ## Prompt Injection Scan
+
+        ${INJECTION_OUTPUT}"
+          echo "Prompt injection scan complete: ${INJECTION_COUNT} findings"
+        fi
+
+        # Supply chain risk assessment
+        if [ "${{ inputs.supply-chain-risk }}" = "true" ]; then
+          echo "Running supply chain risk assessment..."
+          RISK_OUTPUT=$(blameprompt supply-chain-risk 2>&1) || true
+          RISK_SCORE=$(echo "$RISK_OUTPUT" | grep -oP 'Overall Risk Score: \K[0-9.]+' || echo "0.0")
+          REPORT="${REPORT}
+
+        ## Supply Chain Risk Assessment
+
+        ${RISK_OUTPUT}"
+          echo "Supply chain risk assessment complete: score ${RISK_SCORE}"
+        fi
+
+        # Set outputs
+        echo "vuln-count=${VULN_COUNT}" >> $GITHUB_OUTPUT
+        echo "injection-count=${INJECTION_COUNT}" >> $GITHUB_OUTPUT
+        echo "risk-score=${RISK_SCORE}" >> $GITHUB_OUTPUT
+        echo "has-critical=${HAS_CRITICAL}" >> $GITHUB_OUTPUT
+
+        # Save report for the comment step
+        echo "$REPORT" > /tmp/blameprompt-report.txt
+
+    - name: Post PR Comment
+      if: inputs.post-comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        cd ${{ github.workspace }}
+
+        # Try blameprompt's built-in PR comment first
+        if blameprompt github-comment --pr ${{ github.event.pull_request.number }} 2>/dev/null; then
+          echo "PR comment posted via blameprompt github-comment"
+        else
+          # Fallback: post the scan report directly
+          REPORT=$(cat /tmp/blameprompt-report.txt)
+          COMMENT_BODY="# BlamePrompt Security Report
+
+        **Scan Results for PR #${{ github.event.pull_request.number }}**
+
+        | Check | Findings |
+        |-------|----------|
+        | Vulnerabilities | ${{ steps.scan.outputs.vuln-count }} |
+        | Prompt Injection | ${{ steps.scan.outputs.injection-count }} |
+        | Risk Score | ${{ steps.scan.outputs.risk-score }}/10.0 |
+
+        <details>
+        <summary>Full Report</summary>
+
+        \`\`\`
+        ${REPORT}
+        \`\`\`
+
+        </details>
+
+        ---
+        *Generated by [BlamePrompt](https://github.com/pchaganti/blameprompt)*"
+
+          gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT_BODY"
+          echo "PR comment posted via gh CLI"
+        fi
+
+    - name: Check Thresholds
+      if: inputs.fail-on-critical == 'true' || inputs.risk-threshold != '0'
+      shell: bash
+      run: |
+        FAILED=false
+
+        if [ "${{ inputs.fail-on-critical }}" = "true" ] && [ "${{ steps.scan.outputs.has-critical }}" = "true" ]; then
+          echo "::error::Critical vulnerabilities found! Set fail-on-critical to false to ignore."
+          FAILED=true
+        fi
+
+        if [ "${{ inputs.risk-threshold }}" != "0" ]; then
+          THRESHOLD=${{ inputs.risk-threshold }}
+          SCORE=${{ steps.scan.outputs.risk-score }}
+          if [ "$(echo "$SCORE > $THRESHOLD" | bc -l 2>/dev/null || echo 0)" = "1" ]; then
+            echo "::error::Supply chain risk score (${SCORE}) exceeds threshold (${THRESHOLD})."
+            FAILED=true
+          fi
+        fi
+
+        if [ "$FAILED" = "true" ]; then
+          exit 1
+        fi

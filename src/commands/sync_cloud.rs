@@ -77,6 +77,10 @@ struct DailyActivity {
     total_session_duration_secs: u64,
     projects_used: HashMap<String, u32>,
     hourly_prompts: HashMap<String, u32>,
+    languages_used: HashMap<String, u32>,
+    editors_used: HashMap<String, u32>,
+    total_accepted_lines: u32,
+    total_overridden_lines: u32,
 }
 
 #[derive(Serialize)]
@@ -191,6 +195,65 @@ pub fn run(quiet: bool) {
                 *entry = dur;
             }
         }
+
+        // Language detection from file extensions
+        for fc in r.all_file_changes() {
+            if let Some(ext) = std::path::Path::new(&fc.path).extension().and_then(|e| e.to_str()) {
+                let ext_lower = ext.to_lowercase();
+                let lang = match ext_lower.as_str() {
+                    "rs" => "Rust",
+                    "ts" | "tsx" => "TypeScript",
+                    "js" | "jsx" => "JavaScript",
+                    "py" => "Python",
+                    "go" => "Go",
+                    "rb" => "Ruby",
+                    "java" => "Java",
+                    "cpp" | "cc" | "cxx" => "C++",
+                    "c" | "h" => "C",
+                    "cs" => "C#",
+                    "swift" => "Swift",
+                    "kt" | "kts" => "Kotlin",
+                    "php" => "PHP",
+                    "html" | "htm" => "HTML",
+                    "css" | "scss" | "sass" => "CSS",
+                    "sql" => "SQL",
+                    "sh" | "bash" | "zsh" => "Shell",
+                    "json" => "JSON",
+                    "yaml" | "yml" => "YAML",
+                    "toml" => "TOML",
+                    "md" | "mdx" => "Markdown",
+                    "vue" => "Vue",
+                    "svelte" => "Svelte",
+                    "dart" => "Dart",
+                    "r" => "R",
+                    "scala" => "Scala",
+                    "zig" => "Zig",
+                    "lua" => "Lua",
+                    "ex" | "exs" => "Elixir",
+                    other => other,
+                };
+                *day.languages_used.entry(lang.to_string()).or_insert(0) += 1;
+            }
+        }
+
+        // Editor detection from provider
+        let editor = match r.provider.as_str() {
+            "claude" => "Claude Code",
+            "cursor" => "Cursor",
+            "copilot" => "GitHub Copilot",
+            "windsurf" => "Windsurf",
+            "codex" => "OpenAI Codex",
+            other => other,
+        };
+        *day.editors_used.entry(editor.to_string()).or_insert(0) += 1;
+
+        // AI vs Human tracking
+        if let Some(accepted) = r.accepted_lines {
+            day.total_accepted_lines += accepted;
+        }
+        if let Some(overridden) = r.overridden_lines {
+            day.total_overridden_lines += overridden;
+        }
     }
 
     let activities: Vec<DailyActivity> = {
@@ -222,6 +285,10 @@ pub fn run(quiet: bool) {
                     total_session_duration_secs,
                     projects_used: b.projects_used,
                     hourly_prompts: b.hourly_prompts,
+                    languages_used: b.languages_used,
+                    editors_used: b.editors_used,
+                    total_accepted_lines: b.total_accepted_lines,
+                    total_overridden_lines: b.total_overridden_lines,
                 }
             })
             .collect();
@@ -277,4 +344,8 @@ struct DailyActivityBuilder {
     session_durations: HashMap<String, u64>,
     projects_used: HashMap<String, u32>,
     hourly_prompts: HashMap<String, u32>,
+    languages_used: HashMap<String, u32>,
+    editors_used: HashMap<String, u32>,
+    total_accepted_lines: u32,
+    total_overridden_lines: u32,
 }

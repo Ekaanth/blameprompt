@@ -1,5 +1,6 @@
 pub mod analytics;
 pub mod dash;
+pub mod doctor;
 pub mod login;
 pub mod audit;
 pub mod blame;

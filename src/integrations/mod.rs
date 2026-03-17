@@ -1,8 +1,14 @@
 pub mod agent_trace;
+pub mod amp;
 pub mod antigravity;
 pub mod claude_hooks;
 pub mod codex;
+pub mod continue_ai;
 pub mod copilot;
 pub mod cursor;
+pub mod droid;
 pub mod gemini;
+pub mod junie;
+pub mod opencode;
+pub mod rovo_dev;
 pub mod windsurf;
