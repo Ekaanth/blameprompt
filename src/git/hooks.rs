@@ -144,9 +144,10 @@ fn pre_push_hook(binary: &str) -> String {
 # $1 = remote name (e.g. "origin"), $2 = remote URL
 # Guard against recursive invocation: when we push notes below, git calls this
 # hook again for that inner push.  Skip on re-entry.
+# Run in the background (&) so the main push is not blocked by the notes push.
 if [ -z "$BLAMEPROMPT_NOTES_PUSH" ]; then
     REMOTE="${{1:-origin}}"
-    BLAMEPROMPT_NOTES_PUSH=1 git push "$REMOTE" refs/notes/blameprompt 2>/dev/null || true
+    (BLAMEPROMPT_NOTES_PUSH=1 git push "$REMOTE" refs/notes/blameprompt 2>/dev/null || true) &
 fi
 # /BlamePrompt
 "#,
