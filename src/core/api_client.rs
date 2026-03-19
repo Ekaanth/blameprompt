@@ -20,13 +20,14 @@ impl ApiClient {
         })
     }
 
-    fn headers(&self) -> HeaderMap {
+    fn headers(&self) -> Result<HeaderMap, String> {
         let mut headers = HeaderMap::new();
         headers.insert(
             "X-API-Key",
-            HeaderValue::from_str(&self.api_key).expect("Invalid API key header"),
+            HeaderValue::from_str(&self.api_key)
+                .map_err(|_| "Invalid API key — contains non-ASCII or control characters. Re-run `blameprompt login`.".to_string())?,
         );
-        headers
+        Ok(headers)
     }
 
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, String> {
@@ -34,7 +35,7 @@ impl ApiClient {
         let res = self
             .client
             .get(&url)
-            .headers(self.headers())
+            .headers(self.headers()?)
             .send()
             .map_err(|e| format!("Request failed: {}", e))?;
 
@@ -58,7 +59,7 @@ impl ApiClient {
         let res = self
             .client
             .post(&url)
-            .headers(self.headers())
+            .headers(self.headers()?)
             .json(body)
             .send()
             .map_err(|e| format!("Request failed: {}", e))?;

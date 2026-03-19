@@ -147,11 +147,22 @@ fn pre_push_hook(binary: &str) -> String {
 # Run in the background (&) so the main push is not blocked by the notes push.
 if [ -z "$BLAMEPROMPT_NOTES_PUSH" ]; then
     REMOTE="${{1:-origin}}"
-    # Use the real git binary to avoid going through the blameprompt shim (if installed).
-    _BP_REAL_GIT=$(PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v '.blameprompt/bin' | tr '\n' ':' | sed 's/:$//') which git 2>/dev/null || echo git)
-    # Redirect ALL fds (stdin/stdout/stderr) so git does not wait for the
-    # backgrounded process's inherited pipes to close before completing the push.
-    (BLAMEPROMPT_NOTES_PUSH=1 "$_BP_REAL_GIT" push "$REMOTE" refs/notes/blameprompt </dev/null >/dev/null 2>&1 || true) &
+    # Skip entirely if no local blameprompt notes exist — avoids pointless network round-trips.
+    if git rev-parse --verify refs/notes/blameprompt >/dev/null 2>&1; then
+        # If the git wrapper shim is installed, let IT push notes AFTER the main push
+        # finishes (avoids concurrent network contention). Only push from the hook if
+        # there is no shim.
+        if [ ! -x "$HOME/.blameprompt/bin/git" ]; then
+            # Use the real git binary to avoid going through the blameprompt shim (if installed).
+            _BP_REAL_GIT=$(PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -Fv '.blameprompt/bin' | tr '\n' ':' | sed 's/:$//') which git 2>/dev/null || echo git)
+            # Push with --no-verify to prevent this hook from firing again.
+            # Redirect ALL fds so git does not wait for the backgrounded process's
+            # inherited pipes to close before completing the push.
+            # Sleep briefly so the main push starts its network connection first;
+            # this avoids both pushes racing for the same SSH/HTTPS socket.
+            (sleep 1 && BLAMEPROMPT_NOTES_PUSH=1 "$_BP_REAL_GIT" push --no-verify "$REMOTE" refs/notes/blameprompt </dev/null >/dev/null 2>&1 || true) &
+        fi
+    fi
 fi
 # /BlamePrompt
 "#,

@@ -56,16 +56,14 @@ impl GeminiSession {
             .collect();
 
         let session_end = self.end_timestamp.unwrap_or(self.timestamp);
-        let session_duration_secs = self
-            .end_timestamp
-            .and_then(|end| {
-                let dur = (end - self.timestamp).num_seconds();
-                if dur > 0 {
-                    Some(dur as u64)
-                } else {
-                    None
-                }
-            });
+        let session_duration_secs = self.end_timestamp.and_then(|end| {
+            let dur = (end - self.timestamp).num_seconds();
+            if dur > 0 {
+                Some(dur as u64)
+            } else {
+                None
+            }
+        });
 
         TranscriptParseResult {
             transcript: Transcript { messages },

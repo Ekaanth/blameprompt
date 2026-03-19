@@ -17,7 +17,7 @@ sha2 = "0.10"
 uuid = { version = "1.11", features = ["v4"] }
 git2 = { version = "0.19", features = ["vendored-openssl"] }
 regex = "1.10"
-comfy-table = "7.1"
+comfy-table = ">=7.1, <7.2"
 rusqlite = { version = "0.31", features = ["bundled"] }
 dirs = "5.0"
 toml = "0.8"

@@ -51,9 +51,12 @@ if [ $_EXIT -eq 0 ]; then
             "$BLAMEPROMPT" attach 2>/dev/null || true
             ;;
 push)
-            # Notes are pushed by the pre-push git hook (installed by blameprompt init).
-            # Do NOT push notes here — the hook already fires during $REAL_GIT push above,
-            # and duplicating the push doubles network time and can exhaust process limits.
+            # Push blameprompt notes AFTER the main push succeeds (no concurrency).
+            # The pre-push hook detects the shim and defers to us, so there is no duplication.
+            if [ -z "$BLAMEPROMPT_NOTES_PUSH" ] && git rev-parse --verify refs/notes/blameprompt >/dev/null 2>&1; then
+                _REMOTE="${{2:-origin}}"
+                (BLAMEPROMPT_NOTES_PUSH=1 "$REAL_GIT" push --no-verify "$_REMOTE" refs/notes/blameprompt </dev/null >/dev/null 2>&1 || true) &
+            fi
             ;;
     esac
 fi
@@ -216,11 +219,11 @@ mod tests {
             "should skip own bin dir"
         );
         assert!(content.contains("attach"), "should run attach after commit");
-        // Notes push is handled by the pre-push git hook, not the shim.
-        // The shim should NOT contain its own notes push logic.
+        // Notes push happens in the shim AFTER the main push completes (no concurrency).
+        // The pre-push hook detects the shim and defers, so there is no duplication.
         assert!(
-            !content.contains("refs/notes/blameprompt"),
-            "shim should NOT push notes (pre-push hook handles it)"
+            content.contains("refs/notes/blameprompt"),
+            "shim should push notes after the main push succeeds"
         );
         assert!(
             content.contains("/usr/local/bin/blameprompt"),
