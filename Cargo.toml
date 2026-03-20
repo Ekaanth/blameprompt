@@ -1,11 +1,11 @@
 [package]
 name = "blameprompt"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2021"
 license = "MIT"
-description = "Gitblame but for prompts. Track AI-generated code provenance via Git Notes"
+description = "Track your AI coding activity and build your developer portfolio. 15 agents, developer score, badges, and public profiles."
 repository = "https://github.com/ekaanth/blameprompt"
-keywords = ["git", "ai", "claude", "provenance", "blame"]
+keywords = ["git", "ai", "claude", "developer-portfolio", "ai-skills"]
 categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]

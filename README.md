@@ -51,7 +51,7 @@ blameprompt login
 blameprompt dash
 ```
 
-Or sign in directly at [blameprompt.com/sign-in](https://blameprompt.com/sign-in) to connect your GitHub account and access your dashboard.
+Or sign in directly at [blameprompt.com/login](https://blameprompt.com/login) to connect your GitHub account and access your dashboard.
 
 ## How it works
 

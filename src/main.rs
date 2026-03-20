@@ -895,7 +895,7 @@ fn main() {
                         .and_then(|o| String::from_utf8(o.stdout).ok())
                         .map(|s| s.trim().to_string())
                         .unwrap_or_else(|| "HEAD".to_string());
-                    eprintln!(
+                    println!(
                         "[BlamePrompt] {} receipt(s) attached to {}",
                         data.receipts.len(),
                         head_short

@@ -39,7 +39,9 @@ fn post_commit_hook(binary: &str) -> String {
 {preamble}BLAMEPROMPT="{binary}"
 # Fallback: search augmented PATH (handles stale absolute paths and GUI git clients)
 [ -x "$BLAMEPROMPT" ] || BLAMEPROMPT="$(command -v blameprompt 2>/dev/null || echo '')"
-[ -n "$BLAMEPROMPT" ] && "$BLAMEPROMPT" attach 2>/dev/null || true
+if [ -n "$BLAMEPROMPT" ] && [ -x "$BLAMEPROMPT" ]; then
+    "$BLAMEPROMPT" attach 2>>"${{GIT_DIR:-.git}}/blameprompt-hook.log" || true
+fi
 # /BlamePrompt
 "#,
         preamble = PATH_PREAMBLE,

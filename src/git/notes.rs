@@ -38,7 +38,7 @@ pub fn attach_receipts_to_head(staging: &StagingData) -> Result<(), String> {
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to spawn git notes: {}", e))?;
 
@@ -49,9 +49,12 @@ pub fn attach_receipts_to_head(staging: &StagingData) -> Result<(), String> {
             .map_err(|e| format!("Failed to write to stdin: {}", e))?;
     }
 
-    let status = child.wait().map_err(|e| format!("Failed to wait: {}", e))?;
-    if !status.success() {
-        return Err("git notes add failed".to_string());
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to wait: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git notes add failed: {}", stderr.trim()));
     }
 
     Ok(())

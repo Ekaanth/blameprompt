@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-03-20
+
+### Added
+
+- **6 new agent integrations** — Continue (`record-continue`), Droid (`record-droid`), JetBrains Junie (`record-junie`), Atlassian Rovo Dev (`record-rovo-dev`), Sourcegraph Amp (`record-amp`), and OpenCode (`record-opencode`). All auto-configured by `blameprompt init --global`. Total supported agents: 13.
+- **BlamePrompt Cloud** — New `login`, `logout`, `dash`, `profile`, and `sync` commands. Authenticate via GitHub Device Flow or API token. `blameprompt dash` opens your dashboard; `blameprompt profile --edit` opens profile settings. `blameprompt sync` uploads aggregated daily metrics (not individual prompts) to the cloud.
+- **Browser login fallback** — When the device flow API is unavailable, `blameprompt login` gracefully falls back to opening `blameprompt.com/login` in the browser with instructions to use `--token`.
+- **`blameprompt doctor`** — Diagnostic command that checks hook installation, binary paths, staging state, and git notes health.
+- **One-line installers** — `curl -sSL blameprompt.com/install.sh | bash` (macOS/Linux) and `irm blameprompt.com/install.ps1 | iex` (Windows). Both auto-run `blameprompt init --global` after install.
+
+### Fixed
+
+- **Post-commit hook silently swallowing output** — The hook redirected all stderr to `/dev/null`, hiding both success confirmations and error messages. Now logs errors to `.git/blameprompt-hook.log` and prints success to stdout.
+- **Attach success message invisible** — `blameprompt attach` printed its `[BlamePrompt] N receipt(s) attached` message to stderr, which the hook suppressed. Changed to stdout so it appears during `git commit`.
+- **Git notes errors silently discarded** — `git notes add` stderr was piped to `Stdio::null()`, hiding permission errors, ref corruption, and other failures. Now captured and included in the error message.
+- **Clippy `comparison_chain` warning** — Replaced `if/else if` chain in supply chain risk scoring with idiomatic `match` on `cmp()`.
+- **Clippy `manual_is_multiple_of` lint** — Added `#[allow(unknown_lints, clippy::manual_is_multiple_of)]` for cross-version compatibility (lint exists on nightly/1.94+ but not on older stable).
+- **Git push slowness** — Multiple fixes to pre-push hook and git wrap shim for note pushing.
+- **Monorepo subfolder staging** — Fixed staging.json discovery when blameprompt is run from a subfolder.
+- **Global install reliability** — Fixed `blameprompt init --global` edge cases.
+
+### Changed
+
+- **CI workflow optimized** — Removed redundant `cargo build` step (clippy + test already compile). Added `restore-keys` for partial cache hits.
+- **Release workflow hardened** — macOS x86 now builds on Intel runners (`macos-13`) instead of cross-compiling on ARM. Added cargo caching. Fixed `workflow_dispatch` to require a tag input. Release job now runs on both tag push and manual dispatch.
+- **README rewritten** — Streamlined from ~350 lines to ~170 lines. Added install scripts, quick start with login flow, all 13 agents, account commands, and diagnostics section. Removed verbose tables and diagrams.
+- **Domain URLs consolidated** — All source references point to `blameprompt.com` (`api.blameprompt.com` for API).
+- Total test count: 191 (up from 186 in v0.3.0).
+
 ## [0.3.0] - 2026-03-10
 
 ### Added
@@ -98,6 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 42 unit tests covering receipts, redaction, pricing, model classification, sessions, transcripts, staging, and config.
 - Zero compiler warnings, zero clippy warnings.
 
+[1.0.0]: https://github.com/ekaanth/blameprompt/releases/tag/v1.0.0
 [0.3.0]: https://github.com/ekaanth/blameprompt/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ekaanth/blameprompt/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ekaanth/blameprompt/releases/tag/v0.1.0
