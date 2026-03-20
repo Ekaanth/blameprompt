@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::core::auth::{self, Credentials};
 
-const DEFAULT_API_URL: &str = "https://blameprompt.com";
+const DEFAULT_API_URL: &str = "https://api.blameprompt.com";
 
 #[derive(Deserialize)]
 struct DeviceFlowInit {
