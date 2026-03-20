@@ -121,13 +121,9 @@ pub fn run(token: Option<&str>, api_url: Option<&str>) {
                 println!("  \x1b[2mCould not open browser. Visit manually:\x1b[0m");
                 println!("  \x1b[36m{}\x1b[0m", sign_in_url);
             }
-            println!(
-                "  After signing in, copy your API token from your profile and run:"
-            );
+            println!("After signing in, copy your API token from your profile and run:");
             println!();
-            println!(
-                "    \x1b[36mblameprompt login --token <your-token>\x1b[0m"
-            );
+            println!("\x1b[36mblameprompt login --token <your-token>\x1b[0m");
             println!();
             return;
         }
