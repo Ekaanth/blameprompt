@@ -73,6 +73,7 @@ struct DailyActivity {
     editors_used: HashMap<String, u32>,
     total_accepted_lines: u32,
     total_overridden_lines: u32,
+    project: String,
 }
 
 #[derive(Serialize)]
@@ -128,8 +129,9 @@ pub fn run(quiet: bool) {
         }
     }
 
-    // Also include uncommitted/staged receipts
-    let staged = crate::commands::staging::read_staging();
+    // Also include uncommitted/staged receipts from all subdirectories
+    // (handles monorepos where frontend/, backend/, etc. each have their own staging)
+    let staged = crate::commands::staging::read_all_staging();
     for receipt in staged.receipts {
         if seen_ids.insert(receipt.id.clone()) {
             all_receipts.push(receipt);
@@ -264,6 +266,7 @@ pub fn run(quiet: bool) {
                     b.quality_scores.iter().sum::<u32>() as f64 / b.quality_scores.len() as f64
                 };
                 let total_session_duration_secs: u64 = b.session_durations.values().sum();
+                let project = b.projects_used.keys().next().cloned().unwrap_or_else(|| "default".to_string());
                 DailyActivity {
                     date,
                     prompt_count: b.prompt_count,
@@ -286,6 +289,7 @@ pub fn run(quiet: bool) {
                     editors_used: b.editors_used,
                     total_accepted_lines: b.total_accepted_lines,
                     total_overridden_lines: b.total_overridden_lines,
+                    project,
                 }
             })
             .collect();
