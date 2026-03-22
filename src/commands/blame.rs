@@ -1,4 +1,5 @@
 use crate::core::receipt::{CodeOrigin, CodeOriginStats};
+use crate::core::util;
 use crate::git::notes;
 use comfy_table::{Cell, Color, Table};
 use serde::Serialize;
@@ -73,7 +74,7 @@ pub fn calculate_code_origin(file: &str) -> Option<CodeOriginStats> {
             // Check file_mappings first for finer granularity
             if let Some(ref mappings) = payload.file_mappings {
                 for fm in mappings {
-                    if fm.path == file || file.ends_with(&fm.path) || fm.path.ends_with(file) {
+                    if util::paths_match(&fm.path, file) {
                         // Use hunks from file_mappings for precise attribution
                         // (stored in sha_receipts as regular receipts for now)
                     }
@@ -216,7 +217,7 @@ fn compute_blame(file: &str) -> Option<(Vec<String>, HashMap<u32, String>, Vec<L
             // Check file_mappings first for finer granularity
             if let Some(mappings) = sha_mappings.get(sha) {
                 for fm in mappings {
-                    if fm.path == file || file.ends_with(&fm.path) || fm.path.ends_with(file) {
+                    if util::paths_match(&fm.path, file) {
                         for h in &fm.hunks {
                             if line_num >= h.start_line && line_num <= h.end_line {
                                 match h.origin {

@@ -39,9 +39,18 @@ pub fn short_sha(sha: &str) -> String {
 }
 
 /// Check whether two file paths refer to the same file.
-/// Handles relative/absolute mismatches by checking suffix containment.
+/// Handles relative/absolute mismatches by checking if one ends with `/` + the other
+/// (or is an exact match). This avoids false positives like "ob.rs" matching "a/bob.rs".
 pub fn paths_match(a: &str, b: &str) -> bool {
-    a == b || a.ends_with(b) || b.ends_with(a)
+    if a == b {
+        return true;
+    }
+    // Check if a ends with /b or b ends with /a (full path component match)
+    let a_suffix_of_b =
+        a.len() < b.len() && b.ends_with(a) && b.as_bytes()[b.len() - a.len() - 1] == b'/';
+    let b_suffix_of_a =
+        b.len() < a.len() && a.ends_with(b) && a.as_bytes()[a.len() - b.len() - 1] == b'/';
+    a_suffix_of_b || b_suffix_of_a
 }
 
 /// Return `git config user.name <user.email>` for the current repo.

@@ -152,6 +152,16 @@ pub fn relative_path(path: &str) -> String {
     path.to_string()
 }
 
+/// Properly escape a value for CSV output: wrap in quotes if it contains
+/// commas, quotes, or newlines, and double any internal quotes.
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
 fn write_receipt_md(md: &mut String, r: &Receipt) {
     md.push_str(&format!("#### Receipt: {}\n", r.id));
     md.push_str("| Field | Value |\n");
@@ -331,19 +341,19 @@ pub fn run(
                         .collect();
                     println!(
                         "{},{},{},{},{},{},{},{},{:.4},{},{},{},{}",
-                        sha_display,
-                        entry.commit_date,
-                        entry.commit_author,
-                        entry.commit_message.replace(',', ";"),
-                        r.provider,
-                        r.model,
-                        r.session_id,
+                        csv_escape(&sha_display),
+                        csv_escape(&entry.commit_date),
+                        csv_escape(&entry.commit_author),
+                        csv_escape(&entry.commit_message),
+                        csv_escape(&r.provider),
+                        csv_escape(&r.model),
+                        csv_escape(&r.session_id),
                         r.message_count,
                         r.cost_usd,
-                        files_str.join(";"),
+                        csv_escape(&files_str.join(";")),
                         r.total_lines_changed(),
-                        r.prompt_summary.replace(',', ";"),
-                        r.prompt_hash,
+                        csv_escape(&r.prompt_summary),
+                        csv_escape(&r.prompt_hash),
                     );
                 }
             }

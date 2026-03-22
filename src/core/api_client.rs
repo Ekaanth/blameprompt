@@ -1,6 +1,7 @@
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::de::DeserializeOwned;
+use std::time::Duration;
 
 use super::auth;
 
@@ -13,8 +14,13 @@ pub struct ApiClient {
 impl ApiClient {
     pub fn from_credentials() -> Result<Self, String> {
         let creds = auth::load().ok_or("Not logged in. Run `blameprompt login` first.")?;
+        let client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
         Ok(Self {
-            client: Client::new(),
+            client,
             base_url: creds.api_url,
             api_key: creds.api_key,
         })
@@ -44,7 +50,20 @@ impl ApiClient {
         }
 
         if !res.status().is_success() {
-            return Err(format!("API error: {}", res.status()));
+            let status = res.status();
+            let body = res.text().unwrap_or_default();
+            let detail = body
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(200)
+                .collect::<String>();
+            return Err(if detail.is_empty() {
+                format!("API error: {}", status)
+            } else {
+                format!("API error ({}): {}", status, detail)
+            });
         }
 
         res.json::<T>().map_err(|e| format!("Parse error: {}", e))
@@ -69,7 +88,20 @@ impl ApiClient {
         }
 
         if !res.status().is_success() {
-            return Err(format!("API error: {}", res.status()));
+            let status = res.status();
+            let body = res.text().unwrap_or_default();
+            let detail = body
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(200)
+                .collect::<String>();
+            return Err(if detail.is_empty() {
+                format!("API error: {}", status)
+            } else {
+                format!("API error ({}): {}", status, detail)
+            });
         }
 
         res.json::<T>().map_err(|e| format!("Parse error: {}", e))

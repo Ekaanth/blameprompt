@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-03-22
+
+### Fixed
+
+- **Token count 773x undercount in cloud sync** — `total_tokens_in` now includes `cache_read_tokens` and `cache_creation_tokens`. Previously only counted non-cached `input_tokens`, massively undercounting actual consumption since prompt caching serves the vast majority of input tokens.
+- **File additions/deletions overwritten per prompt** — Each PostToolUse was overwriting `total_additions`/`total_deletions` instead of accumulating. Now recomputed from the merged `files_changed` vector on every upsert, so a prompt editing 11 files correctly reflects all 11.
+- **Untracked files reported as 0 additions** — `get_diff_stats()` now falls back to counting lines via `std::fs::read_to_string` for new/untracked files that `git diff` can't see. Previously returned `(0, 0)` for all files in untracked directories (e.g. `docs/`).
+- **Timestamp misalignment in transcript parsing** — `user_prompt_timestamps` vector could fall out of sync with `count_user_prompts()` if a timestamp failed to parse, causing all subsequent `timestamp_for_prompt()` calls to return the wrong prompt's timestamp. Now always pushes an entry (falls back to `Utc::now()`).
+- **`paths_match()` false positives** — Suffix matching like `"ob.rs"` matching `"a/bob.rs"` is now prevented by requiring a `/` separator before the matched suffix.
+- **File extension matching case-sensitive** — Prompt quality scoring now lowercases tokens before matching extensions, so `Main.RS` correctly detects a file reference.
+- **`sync_cloud.rs` panic on missing home dir** — Replaced `.expect()` with `Result` return in `sync_state_path()`.
+- **`show.rs` inconsistent SHA display** — Replaced inline `&sha[..8]` with `util::short_sha()`.
+- **`handle_ask_user_question` race condition** — Replaced direct staging mutation with `upsert_receipt_in()` to avoid data loss from concurrent hook events.
+- **`get_changed_lines()` misleading default** — Returns `(0, 0)` instead of `(1, 1)` for deleted/nonexistent files.
+- **API client hangs indefinitely** — Added 30s request timeout and 10s connect timeout to `reqwest` client.
+- **API error messages vague** — Error responses now include the response body (first 200 chars) instead of just the HTTP status code.
+- **Login device flow hangs forever** — Added 10-minute polling timeout (120 attempts at 5s intervals).
+- **CSV audit export breaks on special chars** — Added proper `csv_escape()` that wraps fields containing commas, quotes, or newlines in double-quotes with escaped inner quotes.
+- **Supply chain risk score inflated 10x** — Formula had an extra `* 10.0` multiplier after weighted average. Risk scores now correctly stay in the 0–10 range.
+- **Session timing fields lost on upsert** — `session_start`, `session_duration_secs`, and `ai_response_time_secs` are now preserved through staging merge (previously overwritten by `*existing = receipt.clone()`).
+- **Corrupted config silently replaced** — `claude_hooks.rs` install now returns an error if the settings JSON can't be parsed, instead of silently creating an empty object (which would destroy the user's other hooks).
+- **`blame.rs` fuzzy path matching** — Replaced inline triple-OR condition with `util::paths_match()` to prevent false positives across different directories.
+- **Language stats inflated in sync** — Language detection now deduplicates by unique file per day, so editing `main.rs` ten times counts as 1 Rust file, not 10.
+- **Agent double-counting in sync** — `agents_spawned` list is now only counted when `subagent_activities` is empty, preventing the same agent from being counted twice.
+- **GitHub PR number extraction edge case** — `extract_first_pr_number` now handles PR number at the end of a JSON string.
+- **Rebase line offset defaults** — Hunk header parse defaults changed from `0` to `1` to match 1-based diff line numbering.
+
+### Added
+
+- **Agent & skill tracking in cloud sync** — DailyActivity now includes `agents_spawned`, `agent_types_used`, `total_agent_count`, `total_agent_duration_secs`, `skills_used`, and `total_user_decisions` for full agent/skill analytics on the dashboard.
+
+### Changed
+
+- **Install scripts use redirect-based version detection** — `install.sh` and `install.ps1` now extract the latest version from the GitHub releases redirect URL instead of the JSON API, avoiding 403 rate-limit errors on unauthenticated requests.
+- **Messaging updated to portfolio/hiring angle** — All user-facing text (installer, CLI about, banner, social posts, docs) updated from "Track AI-generated code" to "Your AI skills deserve a portfolio".
+
 ## [1.0.0] - 2026-03-20
 
 ### Added
@@ -127,6 +163,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 42 unit tests covering receipts, redaction, pricing, model classification, sessions, transcripts, staging, and config.
 - Zero compiler warnings, zero clippy warnings.
 
+[1.0.1]: https://github.com/ekaanth/blameprompt/releases/tag/v1.0.1
 [1.0.0]: https://github.com/ekaanth/blameprompt/releases/tag/v1.0.0
 [0.3.0]: https://github.com/ekaanth/blameprompt/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ekaanth/blameprompt/releases/tag/v0.2.0

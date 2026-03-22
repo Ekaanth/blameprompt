@@ -170,12 +170,15 @@ pub fn parse_claude_jsonl(transcript_path: &str) -> Result<TranscriptParseResult
                 }
 
                 // Capture per-prompt timestamp for real prompts (matches count_user_prompts logic).
+                // Always push an entry for every real prompt so the vec stays aligned with
+                // count_user_prompts. Use Utc::now() as fallback if timestamp is missing/unparseable.
                 if is_real_prompt(&text) {
-                    if let Some(ts_str) = entry.get("timestamp").and_then(|v| v.as_str()) {
-                        if let Ok(ts) = ts_str.parse::<DateTime<Utc>>() {
-                            user_prompt_timestamps.push(ts);
-                        }
-                    }
+                    let ts = entry
+                        .get("timestamp")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+                        .unwrap_or_else(Utc::now);
+                    user_prompt_timestamps.push(ts);
                 }
                 messages.push(Message::User { text });
             }

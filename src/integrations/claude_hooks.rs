@@ -20,11 +20,23 @@ pub fn install() -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| format!("Cannot create ~/.claude/: {}", e))?;
     }
 
-    // Read existing settings or create empty object
+    // Read existing settings or create empty object.
+    // If the file exists but is corrupted JSON, return an error instead of
+    // silently replacing it (which would destroy the user's other hooks).
     let mut settings: serde_json::Value = if path.exists() {
         let content =
             std::fs::read_to_string(&path).map_err(|e| format!("Cannot read settings: {}", e))?;
-        serde_json::from_str(&content).unwrap_or_else(|_| json!({}))
+        if content.trim().is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(&content).map_err(|e| {
+                format!(
+                    "Cannot parse {}: {}. Please fix the JSON manually before installing hooks.",
+                    path.display(),
+                    e
+                )
+            })?
+        }
     } else {
         json!({})
     };

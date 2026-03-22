@@ -207,6 +207,7 @@ fn get_blob_hash(cwd: &str, file_path: &str) -> Option<String> {
 
 /// Get additions and deletions for a file using git diff --numstat.
 /// Returns (additions, deletions). Tries unstaged, staged, then HEAD diffs.
+/// For untracked (new) files, falls back to counting lines with `wc -l`.
 fn get_diff_stats(cwd: &str, file_path: &str) -> (u32, u32) {
     let effective_cwd = if cwd.is_empty() { "." } else { cwd };
     let strategies: &[&[&str]] = &[
@@ -231,6 +232,18 @@ fn get_diff_stats(cwd: &str, file_path: &str) -> (u32, u32) {
                         return (additions, deletions);
                     }
                 }
+            }
+        }
+    }
+
+    // Fallback for untracked/new files: git diff doesn't see them, so count lines directly.
+    // A brand-new file has additions = line count and 0 deletions.
+    let full_path = std::path::Path::new(effective_cwd).join(file_path);
+    if full_path.is_file() {
+        if let Ok(content) = std::fs::read_to_string(&full_path) {
+            let line_count = content.lines().count() as u32;
+            if line_count > 0 {
+                return (line_count, 0);
             }
         }
     }
@@ -293,7 +306,8 @@ fn get_changed_lines(cwd: &str, file_path: &str) -> (u32, u32) {
         }
     }
 
-    (1, 1)
+    // File doesn't exist or is empty — return (0, 0) instead of misleading (1, 1)
+    (0, 0)
 }
 
 pub fn run(agent: &str, hook_input_source: &str) {
@@ -412,7 +426,8 @@ fn build_context(input: &HookInput, agent: &str) -> Option<TranscriptContext> {
 ///
 /// Uses `token_usage_for_prompt()` to sum only the assistant messages within the prompt's
 /// message slice, avoiding the cumulative full-session totals that inflate costs.
-/// Falls back to the full-session context values if per-prompt data isn't available.
+/// Returns (0.0, None) if the JSONL has no usage data for this prompt (e.g. transcript
+/// not yet flushed, or provider doesn't emit usage fields).
 fn prompt_cost_and_tokens(
     ctx: &TranscriptContext,
     prompt_number: u32,
@@ -427,7 +442,6 @@ fn prompt_cost_and_tokens(
         );
         (cost, Some(usage))
     } else {
-        // No per-prompt usage data — fall back to char-based estimate for this prompt's slice
         (0.0, None)
     }
 }
@@ -858,8 +872,10 @@ fn handle_ask_user_question(input: &HookInput) {
         return;
     }
 
-    // Directly update the staging receipt for this session
-    let mut data = staging::read_staging_in(Path::new(&cwd));
+    // Use upsert to avoid race conditions with concurrent hook events.
+    // Build a minimal receipt carrying only the user_decisions field;
+    // the upsert merge will fold them into the existing receipt.
+    let data = staging::read_staging_in(Path::new(&cwd));
     let last_pn = data
         .receipts
         .iter()
@@ -868,22 +884,25 @@ fn handle_ask_user_question(input: &HookInput) {
         .max();
 
     if let Some(pn) = last_pn {
-        if let Some(receipt) = data
+        if let Some(existing) = data
             .receipts
-            .iter_mut()
+            .iter()
             .find(|r| r.session_id == session_id && r.prompt_number == Some(pn))
         {
-            for decision in decisions {
-                // Skip if a decision with same question text already tracked
-                if !receipt
-                    .user_decisions
-                    .iter()
-                    .any(|d| d.question == decision.question)
-                {
-                    receipt.user_decisions.push(decision);
-                }
-            }
-            staging::write_staging_data_in(&data, &cwd);
+            let mut patch = existing.clone();
+            // Clear fields that upsert should not overwrite from this patch
+            patch.files_changed = vec![];
+            patch.tools_used = vec![];
+            patch.mcp_servers = vec![];
+            patch.agents_spawned = vec![];
+            patch.subagent_activities = vec![];
+            patch.conversation = None;
+            patch.total_additions = 0;
+            patch.total_deletions = 0;
+            patch.cost_usd = 0.0;
+            // Set user decisions — upsert merge will smart-merge by question text
+            patch.user_decisions = decisions;
+            staging::upsert_receipt_in(&patch, &cwd);
         }
     }
 }

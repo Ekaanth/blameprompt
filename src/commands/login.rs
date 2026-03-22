@@ -145,9 +145,16 @@ pub fn run(token: Option<&str>, api_url: Option<&str>) {
 
     println!("  \x1b[2mWaiting for authorization...\x1b[0m");
 
-    // Step 3: Poll for completion
+    // Step 3: Poll for completion (timeout after 10 minutes)
     let interval = Duration::from_secs(init.interval.max(5));
+    let max_attempts = 120; // ~10 min at 5s intervals
+    let mut attempts = 0u32;
     loop {
+        if attempts >= max_attempts {
+            eprintln!("  \x1b[1;31mError:\x1b[0m Device code expired. Please run `blameprompt login` again.");
+            std::process::exit(1);
+        }
+        attempts += 1;
         thread::sleep(interval);
 
         let poll_res = client

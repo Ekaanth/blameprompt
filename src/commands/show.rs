@@ -47,12 +47,12 @@ pub fn run(commit: &str, format: &str) {
         if format == "json" {
             println!(
                 "{{\"error\":\"empty_receipts\",\"commit\":\"{}\"}}",
-                &sha[..8.min(sha.len())]
+                util::short_sha(&sha)
             );
         } else {
             println!(
                 "No AI receipts attached to commit {}",
-                &sha[..8.min(sha.len())]
+                util::short_sha(&sha)
             );
         }
         return;

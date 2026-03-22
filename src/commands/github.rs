@@ -267,7 +267,12 @@ fn extract_first_pr_number(json: &str) -> Option<u32> {
     let needle = "\"number\":";
     let start = json.find(needle)?;
     let after = json[start + needle.len()..].trim_start();
-    let end = after.find(|c: char| !c.is_ascii_digit())?;
+    let end = after
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(after.len());
+    if end == 0 {
+        return None;
+    }
     after[..end].parse().ok()
 }
 

@@ -13,15 +13,15 @@ struct SyncState {
     last_sync: Option<String>,
 }
 
-fn sync_state_path() -> PathBuf {
-    dirs::home_dir()
-        .expect("Could not determine home directory")
+fn sync_state_path() -> Result<PathBuf, String> {
+    Ok(dirs::home_dir()
+        .ok_or_else(|| "Could not determine home directory".to_string())?
         .join(".blameprompt")
-        .join("sync_state")
+        .join("sync_state"))
 }
 
 fn save_sync_state(ts: &DateTime<Utc>) -> Result<(), String> {
-    let path = sync_state_path();
+    let path = sync_state_path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create dir: {}", e))?;
     }
@@ -74,6 +74,16 @@ struct DailyActivity {
     total_accepted_lines: u32,
     total_overridden_lines: u32,
     project: String,
+    // Agent & skill tracking
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    agents_spawned: HashMap<String, u32>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    agent_types_used: HashMap<String, u32>,
+    total_agent_count: u32,
+    total_agent_duration_secs: u64,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    skills_used: HashMap<String, u32>,
+    total_user_decisions: u32,
 }
 
 #[derive(Serialize)]
@@ -153,7 +163,11 @@ pub fn run(quiet: bool) {
         let day = daily.entry(date_key).or_default();
 
         day.prompt_count += 1;
-        day.total_tokens_in += r.input_tokens.unwrap_or(0);
+        // Total input tokens = input + cache_read + cache_creation (cache tokens are the
+        // vast majority of input consumption with prompt caching enabled).
+        day.total_tokens_in += r.input_tokens.unwrap_or(0)
+            + r.cache_read_tokens.unwrap_or(0)
+            + r.cache_creation_tokens.unwrap_or(0);
         day.total_tokens_out += r.output_tokens.unwrap_or(0);
         day.total_cost_usd += r.cost_usd;
 
@@ -193,8 +207,12 @@ pub fn run(quiet: bool) {
             }
         }
 
-        // Language detection from file extensions
+        // Language detection from file extensions (count unique files per language per day)
         for fc in r.all_file_changes() {
+            // Deduplicate: only count each file once per day
+            if !day.seen_files.insert(fc.path.clone()) {
+                continue;
+            }
             if let Some(ext) = std::path::Path::new(&fc.path)
                 .extension()
                 .and_then(|e| e.to_str())
@@ -254,6 +272,46 @@ pub fn run(quiet: bool) {
         if let Some(overridden) = r.overridden_lines {
             day.total_overridden_lines += overridden;
         }
+
+        // Agent tracking — aggregate subagent activity
+        for agent in &r.subagent_activities {
+            day.total_agent_count += 1;
+            if let Some(ref desc) = agent.description {
+                *day.agents_spawned.entry(desc.clone()).or_insert(0) += 1;
+            }
+            if let Some(ref atype) = agent.agent_type {
+                *day.agent_types_used.entry(atype.clone()).or_insert(0) += 1;
+            }
+            // Sum agent durations
+            if let (Some(start), Some(end)) = (agent.started_at, agent.completed_at) {
+                let dur = (end - start).num_seconds().max(0) as u64;
+                day.total_agent_duration_secs += dur;
+            }
+            // Agent-level tool usage
+            for tool in &agent.tools_used {
+                *day.tools_used.entry(format!("agent:{}", tool)).or_insert(0) += 1;
+            }
+        }
+
+        // Agents spawned via agents_spawned list — only count if not already
+        // tracked by subagent_activities (avoid double-counting).
+        if r.subagent_activities.is_empty() {
+            for desc in &r.agents_spawned {
+                *day.agents_spawned.entry(desc.clone()).or_insert(0) += 1;
+                day.total_agent_count += 1;
+            }
+        }
+
+        // Skill tracking — extract from tool names (Skill tool invocations)
+        for tool in &r.tools_used {
+            if tool == "Skill" || tool.starts_with("Skill:") {
+                let skill_name = tool.strip_prefix("Skill:").unwrap_or("unknown");
+                *day.skills_used.entry(skill_name.to_string()).or_insert(0) += 1;
+            }
+        }
+
+        // User decision tracking
+        day.total_user_decisions += r.user_decisions.len() as u32;
     }
 
     let activities: Vec<DailyActivity> = {
@@ -295,6 +353,12 @@ pub fn run(quiet: bool) {
                     total_accepted_lines: b.total_accepted_lines,
                     total_overridden_lines: b.total_overridden_lines,
                     project,
+                    agents_spawned: b.agents_spawned,
+                    agent_types_used: b.agent_types_used,
+                    total_agent_count: b.total_agent_count,
+                    total_agent_duration_secs: b.total_agent_duration_secs,
+                    skills_used: b.skills_used,
+                    total_user_decisions: b.total_user_decisions,
                 }
             })
             .collect();
@@ -357,4 +421,12 @@ struct DailyActivityBuilder {
     editors_used: HashMap<String, u32>,
     total_accepted_lines: u32,
     total_overridden_lines: u32,
+    seen_files: HashSet<String>,
+    // Agent & skill tracking
+    agents_spawned: HashMap<String, u32>,
+    agent_types_used: HashMap<String, u32>,
+    total_agent_count: u32,
+    total_agent_duration_secs: u64,
+    skills_used: HashMap<String, u32>,
+    total_user_decisions: u32,
 }

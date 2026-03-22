@@ -573,21 +573,23 @@ fn has_file_reference(text: &str) -> bool {
 
     // Check for file.ext patterns with boundary awareness.
     // Split on whitespace, backticks, quotes to get tokens.
+    // Use lowercase comparison so "Main.RS" matches ".rs".
     for token in split_tokens(text) {
+        let token_lower = token.to_lowercase();
         for ext in FILE_EXTENSIONS {
-            if let Some(pos) = token.rfind(ext) {
+            if let Some(pos) = token_lower.rfind(ext) {
                 // Must be at end of token or followed by `:` (file:line) or `)`
                 let after = pos + ext.len();
-                let at_end = after >= token.len()
-                    || token.as_bytes().get(after).is_none_or(|&b| {
+                let at_end = after >= token_lower.len()
+                    || token_lower.as_bytes().get(after).is_none_or(|&b| {
                         b == b':' || b == b')' || b == b',' || b == b'"' || b == b'\''
                     });
                 // Must have at least one char before the dot (the filename)
-                let has_name = pos > 0 && token.as_bytes()[pos - 1].is_ascii_alphanumeric();
+                let has_name = pos > 0 && token_lower.as_bytes()[pos - 1].is_ascii_alphanumeric();
                 // Ensure the extension isn't a prefix of a longer extension already in token
                 // e.g., ".c" in "foo.css" — check there's no more alpha after ext
-                let no_longer_ext =
-                    after >= token.len() || !token.as_bytes()[after].is_ascii_alphabetic();
+                let no_longer_ext = after >= token_lower.len()
+                    || !token_lower.as_bytes()[after].is_ascii_alphabetic();
                 if at_end && has_name && no_longer_ext {
                     return true;
                 }

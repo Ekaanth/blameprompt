@@ -177,9 +177,13 @@ pub fn run(output: &str) {
     let factors = calculate_risk_factors(&entries);
 
     // Calculate weighted overall score
-    let overall_score: f64 = factors.iter().map(|f| f.score * f.weight).sum::<f64>()
-        / factors.iter().map(|f| f.weight).sum::<f64>()
-        * 10.0;
+    // Weighted average of factor scores (each factor is already 0-10)
+    let weight_sum: f64 = factors.iter().map(|f| f.weight).sum();
+    let overall_score: f64 = if weight_sum > 0.0 {
+        factors.iter().map(|f| f.score * f.weight).sum::<f64>() / weight_sum
+    } else {
+        0.0
+    };
     let overall_score = overall_score.min(10.0);
 
     let risk_level = if overall_score >= 7.0 {

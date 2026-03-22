@@ -139,11 +139,11 @@ fn parse_hunk_header(line: &str) -> (u32, u32, u32, u32) {
     for part in body.split_whitespace() {
         if let Some(nums) = part.strip_prefix('-') {
             let v: Vec<&str> = nums.split(',').collect();
-            old_start = v.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+            old_start = v.first().and_then(|s| s.parse().ok()).unwrap_or(1);
             old_count = v.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
         } else if let Some(nums) = part.strip_prefix('+') {
             let v: Vec<&str> = nums.split(',').collect();
-            new_start = v.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+            new_start = v.first().and_then(|s| s.parse().ok()).unwrap_or(1);
             new_count = v.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
         } else if part == "@@" {
             break; // End of coordinate section

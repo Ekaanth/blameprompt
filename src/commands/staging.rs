@@ -185,14 +185,23 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
         let keep_prompt_duration_secs = receipt
             .prompt_duration_secs
             .or(existing.prompt_duration_secs);
-        // Preserve diff totals: use the incoming value unless it is zero, in which case
-        // keep whatever was previously recorded (e.g. from PostToolUse).
-        let keep_total_additions = if receipt.total_additions > 0 {
+        // Recompute diff totals from the merged files_changed vec.
+        // Each PostToolUse only carries its own edit's totals, so we must sum
+        // across all merged files to get the correct cumulative total.
+        let keep_total_additions = merged_files.iter().map(|f| f.additions).sum::<u32>();
+        let keep_total_deletions = merged_files.iter().map(|f| f.deletions).sum::<u32>();
+        // If merged files all have zero stats (e.g. untracked files), fall back to
+        // whichever value is non-zero between incoming and existing.
+        let keep_total_additions = if keep_total_additions > 0 {
+            keep_total_additions
+        } else if receipt.total_additions > 0 {
             receipt.total_additions
         } else {
             existing.total_additions
         };
-        let keep_total_deletions = if receipt.total_deletions > 0 {
+        let keep_total_deletions = if keep_total_deletions > 0 {
+            keep_total_deletions
+        } else if receipt.total_deletions > 0 {
             receipt.total_deletions
         } else {
             existing.total_deletions
@@ -262,6 +271,14 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
             .prompt_quality
             .clone()
             .or(receipt.prompt_quality.clone());
+        // Preserve session timing fields: use incoming if present, otherwise keep existing.
+        let keep_session_start = receipt.session_start.or(existing.session_start);
+        let keep_session_duration = receipt
+            .session_duration_secs
+            .or(existing.session_duration_secs);
+        let keep_ai_response_time = receipt
+            .ai_response_time_secs
+            .or(existing.ai_response_time_secs);
 
         // Update the receipt in place
         *existing = receipt.clone();
@@ -293,6 +310,9 @@ pub fn upsert_receipt_in(receipt: &Receipt, base_dir: &str) {
         existing.concurrent_tool_calls = keep_concurrent_tool_calls;
         existing.user_decisions = keep_user_decisions;
         existing.prompt_quality = keep_prompt_quality;
+        existing.session_start = keep_session_start;
+        existing.session_duration_secs = keep_session_duration;
+        existing.ai_response_time_secs = keep_ai_response_time;
 
         // Keep legacy fields pointing at first file
         if let Some(first) = existing.files_changed.first() {
